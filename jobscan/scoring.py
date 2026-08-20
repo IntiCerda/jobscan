@@ -15,10 +15,25 @@ already has nine hundred applications.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from .api import Job
 from .embed import cosine
+
+
+@lru_cache(maxsize=512)
+def _term_pattern(term: str) -> re.Pattern:
+    r"""Match `term` at a word boundary, allowing a suffix.
+
+    Plain substring matching awarded a Digital Marketing posting the full RAG
+    bonus because "rag" appears inside "fragmented". A leading `\b` stops that.
+    The trailing `\w*` is what keeps "embedding" matching "embeddings" and
+    "microservicio" matching "microservicios", which a closing `\b` would
+    break.
+    """
+    return re.compile(r"\b" + re.escape(term.lower()) + r"\w*")
 
 
 @dataclass
@@ -43,6 +58,14 @@ def knockouts(job: Job, profile: dict) -> list[str]:
     if hit_flags:
         reasons.append("marcado por Get on Board: " + ", ".join(hit_flags))
 
+    # The API's `category` query parameter narrows the search but does not
+    # constrain results: a Digital Marketing posting came back from a
+    # `category=programming` request. Filtering on the category the posting
+    # actually carries is what keeps sales and finance roles out.
+    allowed = f.get("allowed_categories")
+    if allowed and job.category and job.category not in set(allowed):
+        reasons.append(f"categoría '{job.category}' fuera de las buscadas")
+
     title = job.title.lower()
     for term in f.get("exclude_in_title", []):
         if term in title:
@@ -61,7 +84,7 @@ def _stack_points(job: Job, profile: dict) -> tuple[float, list[str]]:
     haystack = job.text.lower()
     total, matched = 0.0, []
     for term, weight in (profile.get("fit", {}).get("stack", {})).items():
-        if term.lower() in haystack:
+        if _term_pattern(term).search(haystack):
             total += float(weight)
             matched.append(term)
     return total, matched
@@ -77,7 +100,7 @@ def _body_penalty(job: Job, profile: dict) -> tuple[float, list[str]]:
     hits = [
         t
         for t in profile.get("filters", {}).get("penalize_in_body", [])
-        if t.lower() in haystack
+        if _term_pattern(t).search(haystack)
     ]
     return -1.5 * len(hits), hits
 

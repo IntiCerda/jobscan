@@ -94,6 +94,35 @@ def test_knockouts():
     )
 
 
+def test_short_terms_do_not_match_inside_words():
+    # Regression on a live false positive: a Digital Marketing posting earned
+    # the full RAG bonus because "rag" sits inside "fragmented".
+    trap = make_job(text="replace manual, fragmented customer flows")
+    real = make_job(text="pipelines RAG en producción")
+    check("'rag' does not match inside 'fragmented'", score(trap, PROFILE).parts["stack"] == 0.0)
+    check("but a real mention still counts", score(real, PROFILE).parts["stack"] > 0)
+
+
+def test_plurals_and_suffixes_still_match():
+    p = dict(PROFILE, fit={"stack": {"embedding": 3.0, "microservicio": 2.0}})
+    both = make_job(text="embeddings sobre microservicios")
+    check(
+        "a trailing suffix does not break the match",
+        set(score(both, p).matched) == {"embedding", "microservicio"},
+    )
+
+
+def test_category_knockout():
+    p = dict(PROFILE)
+    p["filters"] = dict(PROFILE["filters"], allowed_categories=["Programming"])
+    check("a foreign category drops", knockouts(make_job(category="Digital Marketing"), p))
+    check("an allowed one passes", not knockouts(make_job(category="Programming"), p))
+    check(
+        "with no list configured, category is ignored",
+        not knockouts(make_job(category="Digital Marketing"), PROFILE),
+    )
+
+
 def test_stack_counted_once():
     repeated = make_job(text="python python python python python")
     single = make_job(text="python")

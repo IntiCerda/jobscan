@@ -21,8 +21,15 @@ hexagonal boundaries: the domain talks to ports, adapters talk to vendors.
 # postings that a synonym would have caught. Each of these is one angle; the
 # results are unioned and deduplicated.
 queries = [
-  "python", "fastapi", "node", "typescript", "nestjs", "backend",
-  "postgresql", "docker", "microservicios", "rag", "llm", "inteligencia artificial",
+  # Languages and frameworks
+  "python", "fastapi", "node", "typescript", "nestjs", "next.js", "react",
+  # Role titles — a posting titled "Ingeniero de Software" names no stack at all
+  "backend", "desarrollador", "ingeniero de software", "full-stack",
+  # Infrastructure and data
+  "postgresql", "docker", "kubernetes", "redis", "microservicios", "api",
+  # The AI angle, where the strongest matches have come from
+  "rag", "llm", "inteligencia artificial", "agentes", "embeddings",
+  "automatización", "datos",
 ]
 category = "programming"
 remote_only = true
@@ -34,6 +41,17 @@ max_pages_per_query = 3
 
 # Postings written in a language you cannot apply in.
 exclude_langs = ["en"]
+
+# The category the posting actually carries. The API's `category` query
+# parameter only narrows the search — it does not constrain what comes back, so
+# a `category=programming` request returned a Digital Marketing role. Names come
+# from /api/v0/categories and must match exactly.
+allowed_categories = [
+  "Programming",
+  "Machine Learning & AI",
+  "Data Science / Analytics",
+  "SysAdmin / DevOps / QA",
+]
 
 # GetOnBoard's own quality flags on a posting. `talent_pool` means the company
 # is collecting CVs rather than filling a named role.
