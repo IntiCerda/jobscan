@@ -1,0 +1,14 @@
+# Local run state: which postings have been seen, and cached embedding vectors.
+# Personal and regenerable — never in the repo.
+.jobscan.sqlite3
+*.sqlite3
+
+# Generated reports
+*.md
+!README.md
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/

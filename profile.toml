@@ -1,0 +1,126 @@
+# Search profile. Everything the ranking depends on lives here, so the code
+# stays generic and a different person only edits this file.
+
+[identity]
+# Free text describing what you actually build. This is the document the
+# semantic layer embeds and compares every posting against, so write it the way
+# you would describe yourself to another engineer — not as a keyword list.
+summary = """
+Backend engineer. I build event-driven services in Python (FastAPI) and
+TypeScript (Node, Hono, NestJS) on PostgreSQL, with Redis Streams as an event
+bus between them. I run LLM agents in production: schema-validated outputs,
+bounded retries, RAG over pgvector with a similarity threshold that short
+circuits before the model is ever called, and local inference on my own
+hardware through Ollama. Infrastructure as code with Terraform, everything in
+Docker behind Traefik, observability with Prometheus and Grafana. I care about
+hexagonal boundaries: the domain talks to ports, adapters talk to vendors.
+"""
+
+[search]
+# The API's search endpoint requires a query term, and any single term misses
+# postings that a synonym would have caught. Each of these is one angle; the
+# results are unioned and deduplicated.
+queries = [
+  "python", "fastapi", "node", "typescript", "nestjs", "backend",
+  "postgresql", "docker", "microservicios", "rag", "llm", "inteligencia artificial",
+]
+category = "programming"
+remote_only = true
+max_pages_per_query = 3
+
+[filters]
+# Hard knockouts. A posting matching any of these is dropped before scoring —
+# no amount of other merit brings it back.
+
+# Postings written in a language you cannot apply in.
+exclude_langs = ["en"]
+
+# GetOnBoard's own quality flags on a posting. `talent_pool` means the company
+# is collecting CVs rather than filling a named role.
+exclude_flags = ["talent_pool", "not_really_remote"]
+
+# A technology named in the title is the spine of the job, not a footnote.
+# Matching here drops the posting outright.
+exclude_in_title = [
+  "sap", "abap", "oracle", "pl/sql", "plsql", ".net", "net core", "c#",
+  "java", "spring", "angular", "salesforce", "wordpress", "shopify",
+  "ruby", "rails", "outsystems", "cobol", "murex", "php", "laravel",
+  "vtex", "sharepoint", "powerbuilder", "mainframe",
+]
+
+# Same list applied to the body, but only as a penalty — a posting can mention
+# Java once in a list of "nice to haves" and still be a good fit.
+penalize_in_body = [
+  "sap", "abap", "oracle", "pl/sql", ".net", "c#", "spring boot",
+  "angular", "salesforce", "ruby on rails", "cobol",
+]
+
+[fit]
+# Terms that earn points when they appear. Weight is how much one occurrence is
+# worth; presence is counted once per term, not per repetition, so a posting
+# cannot win by repeating "Python" twenty times.
+[fit.stack]
+python = 3.0
+fastapi = 3.0
+typescript = 2.5
+"node" = 2.5
+nestjs = 3.0
+"next.js" = 2.0
+react = 1.5
+postgresql = 2.5
+postgres = 2.5
+redis = 2.0
+docker = 1.5
+kubernetes = 1.0
+terraform = 2.0
+microservicio = 2.0
+"event-driven" = 2.5
+rag = 4.0
+llm = 3.5
+embedding = 3.5
+"búsqueda semántica" = 3.5
+pgvector = 4.0
+ollama = 4.0
+"agentes de ia" = 3.5
+prometheus = 1.5
+grafana = 1.5
+pytest = 1.5
+hexagonal = 2.5
+ddd = 1.5
+
+[scoring]
+# Weights for the non-keyword signals. Tuned so that a fresh posting with few
+# applicants outranks a stale one with a slightly better stack match — which is
+# the actual lesson from applying by hand: competition matters more than a
+# marginally better fit.
+weight_stack = 14.0
+weight_semantic = 12.0
+weight_competition = 8.0
+weight_freshness = 5.0
+weight_salary = 3.0
+weight_seniority = 4.0
+
+# Raw stack points at which the stack signal reaches half its weight. Keeps a
+# posting that lists every technology from drowning out competition and pay —
+# see the note in scoring.score.
+stack_half_point = 12.0
+
+# Total applications below which a posting is considered uncrowded — you are
+# competing against everyone who applied, not against the arrival rate.
+# Anything at or under this earns the full competition score.
+good_applications_count = 100
+
+# A posting older than this in days earns no freshness points.
+stale_after_days = 45.0
+
+# Gross USD per month you are aiming for. Postings that publish a range are
+# scored against this; postings that publish nothing are scored neutrally
+# rather than penalized, since most good ones omit it.
+target_salary_usd = 2000
+
+[seniority]
+# Seniority ids come from /api/v0/seniorities. Full credit for levels you fit,
+# partial for a reach, zero for the ones that are not worth the application.
+# 1 = Sin experiencia, 2 = Junior, 3 = Semi Senior, 4 = Senior, 5 = Expert
+fit = [2, 3]
+reach = [4]
