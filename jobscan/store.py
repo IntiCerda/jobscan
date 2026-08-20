@@ -7,11 +7,16 @@ yesterday", which is the only part that needs attention.
 Embedding vectors are cached in the same database because they are the slow
 part of a run: re-embedding four hundred unchanged postings on every pass wastes
 minutes of GPU for an identical answer.
+
+Finished runs are stored whole for the same reason. A scan costs minutes of
+network; the web UI opens on the last one instantly rather than making the
+reader wait for a fresh answer to a question they asked yesterday.
 """
 
 from __future__ import annotations
 
 import array
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,7 +35,16 @@ CREATE TABLE IF NOT EXISTS vectors (
     dims        INTEGER NOT NULL,
     data        BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    finished_at TEXT NOT NULL,
+    payload     TEXT NOT NULL
+);
 """
+
+# Enough history to compare against a run or two back, not enough for a few
+# hundred kilobytes of JSON per scan to grow without bound.
+KEEP_RUNS = 5
 
 
 def _now() -> str:
@@ -103,3 +117,32 @@ class Store:
             """,
             (job_id, model, len(vector), buf.tobytes()),
         )
+
+    # -- finished runs ----------------------------------------------------
+
+    def save_run(self, payload: dict) -> None:
+        self.db.execute(
+            "INSERT INTO runs (finished_at, payload) VALUES (?, ?)",
+            (_now(), json.dumps(payload, ensure_ascii=False)),
+        )
+        self.db.execute(
+            "DELETE FROM runs WHERE id NOT IN "
+            "(SELECT id FROM runs ORDER BY id DESC LIMIT ?)",
+            (KEEP_RUNS,),
+        )
+
+    def last_run(self) -> dict | None:
+        """The most recent stored run, or None if there is none yet.
+
+        A payload that no longer parses is treated as absent rather than raised:
+        an unreadable snapshot should cost the reader a re-scan, not the page.
+        """
+        row = self.db.execute(
+            "SELECT payload FROM runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            return json.loads(row[0])
+        except json.JSONDecodeError:
+            return None
