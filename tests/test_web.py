@@ -111,6 +111,96 @@ def test_filters_narrow_on_what_the_reader_can_see():
     )
 
 
+# -- grouping ---------------------------------------------------------------
+
+
+def spread(n: int = 30) -> list[dict]:
+    """Rows spread across every axis, so no grouping lands them all in one pile."""
+    cats = ["Programming", "SysAdmin / DevOps / QA", "Data Science / Analytics"]
+    return [
+        make_row(
+            id=str(i),
+            title=f"Puesto {i}",
+            score=float(30 - i),
+            seniority_id=2 + (i % 3),
+            category=cats[i % 3],
+            published_at=(datetime.now(timezone.utc) - timedelta(days=i * 3)).isoformat(),
+        )
+        for i in range(n)
+    ]
+
+
+def test_grouping_never_loses_a_posting():
+    # The quiet failure: a fold that drops rows still renders a page that looks
+    # complete, and the count in each summary agrees with what is inside it.
+    rows = spread()
+    for axis in web.GROUPS:
+        groups = web.group_rows(rows, axis, {"2": "Junior", "3": "Semi Senior", "4": "Senior"})
+        total = sum(len(items) for _, items in groups)
+        check(f"agrupar por {axis} conserva las {len(rows)}", total == len(rows))
+        seen = {r["id"] for _, items in groups for r in items}
+        check(f"agrupar por {axis} no duplica ninguna", len(seen) == len(rows))
+
+
+def test_every_posting_reaches_the_page_even_when_folded():
+    # Folded is not the same as absent. A collapsed <details> still contains its
+    # cards, so the whole ranking has to be in the document either way.
+    rows = spread()
+    html = web.render_listing(rows, {}, 30.0, {})
+    check("every card is rendered", html.count('<li class="job"') == len(rows))
+    check("the counts add up to the list", sum(
+        int(n) for n in re.findall(r'class="count">(\d+) vacantes', html)
+    ) == len(rows))
+
+
+def test_folding_does_not_bury_the_best_posting():
+    # The whole point of the tool is the ranking. A page that loads with the
+    # top posting inside a collapsed group has traded away its reason to exist.
+    rows = spread()
+    best = max(rows, key=lambda r: r["score"])
+    html = web.render_listing(rows, {}, 30.0, {})
+    first_group = html.split("</details>")[0]
+    check("the first group is open", first_group.startswith('<details class="grp" open'))
+    check("and it holds the best posting", f'>{best["title"]}<' in first_group)
+
+
+def test_the_page_does_not_load_fully_expanded():
+    # The request that started this: 64 cards is too much scroll. Folding that
+    # opens everything anyway has fixed nothing.
+    rows = spread(30)
+    html = web.render_listing(rows, {}, 30.0, {})
+    opened = sum(
+        len(re.findall(r'<li class="job"', chunk))
+        for chunk in re.split(r'<details class="grp"', html)[1:]
+        if chunk.startswith(" open")
+    )
+    check(f"only {opened} of {len(rows)} are open on load", opened < len(rows))
+    check("but at least one group is showing", opened > 0)
+
+
+def test_the_same_axis_twice_is_not_a_subgroup():
+    # Grouping by band inside band gives one subgroup per group holding
+    # everything: noise dressed as structure.
+    axis, sub = web.group_axes({"group": "band", "sub": "band"})
+    check("the repeated axis drops out", (axis, sub) == ("band", ""))
+
+
+def test_the_default_view_groups_by_band_and_an_empty_axis_stays_flat():
+    axis, sub = web.group_axes({})
+    check("the default is band over category", (axis, sub) == ("band", "category"))
+    check("an explicit empty axis means flat", web.group_axes({"group": ""})[0] == "")
+    check("an invented axis does not raise", web.group_axes({"group": "colour"})[0] == "")
+    check("a flat listing has no groups", '<details class="grp"' not in
+          web.render_listing(spread(), {"group": ""}, 30.0, {}))
+
+
+def test_how_much_is_folded_away_is_stated_in_text():
+    # A collapsed group whose size is only implied by styling tells a screen
+    # reader nothing about what it is hiding.
+    html = web.render_listing(spread(), {}, 30.0, {})
+    check("each summary carries its count as words", "vacantes</span></summary>" in html)
+
+
 # -- time -------------------------------------------------------------------
 
 

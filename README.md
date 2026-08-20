@@ -30,6 +30,16 @@ or by how crowded a posting is, and open any posting to see which weight
 produced its score. The "barrer de nuevo" button runs a sweep in the
 background and streams the log to a page that refreshes itself.
 
+Sixty-odd postings is a long scroll, so the list folds. By default it groups
+into score bands with the posting's own category inside, each one a plain
+`<details>` you can collapse. Groups open from the top down until roughly
+fifteen postings are showing and the rest arrive folded — the first group
+always opens, because a page that loads fully collapsed hides the best posting
+of the day behind a click. Both levels are yours to change: group by category,
+seniority or freshness instead, or turn folding off entirely. Groups are
+ordered by their best posting, so folding never buries the top of the ranking
+under a group that merely sorts first alphabetically.
+
 It is the standard library too: `http.server`, HTML rendered server-side, and
 **no JavaScript at all**. Filtering is a GET form; progress is a `meta refresh`.
 That is not minimalism for its own sake — it is what makes the page work in a

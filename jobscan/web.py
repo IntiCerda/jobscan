@@ -45,6 +45,82 @@ PART_LABELS = {
     "seniority": "Seniority",
 }
 
+# Postings kept open when the page loads, counting from the top group down.
+# Sixty-four cards is a long scroll; one collapsed page that hides the best
+# posting of the day is worse. This opens groups until roughly a screenful of
+# ranking is visible and folds the rest away.
+OPEN_UNTIL = 15
+
+
+def _by_band(row, _names) -> tuple[int, str]:
+    """Ordinal, so the bands read high to low no matter what is inside them."""
+    total = row["score"]
+    if total >= 25:
+        return 0, "25 puntos o más"
+    if total >= 20:
+        return 1, "20 a 25 puntos"
+    if total >= 15:
+        return 2, "15 a 20 puntos"
+    return 3, "menos de 15 puntos"
+
+
+def _by_category(row, _names) -> tuple[int, str]:
+    return 0, row["category"] or "sin categoría"
+
+
+def _by_seniority(row, names) -> tuple[int, str]:
+    # Ordered by the API's own seniority ids, which run junior to expert, so the
+    # groups read as a progression rather than alphabetically.
+    sid = row.get("seniority_id")
+    return (sid if sid is not None else 99), names.get(str(sid), "sin nivel")
+
+
+def _by_freshness(row, _names) -> tuple[int, str]:
+    days = scan.age_days(row["published_at"])
+    if days < 1:
+        return 0, "publicadas hoy"
+    if days < 7:
+        return 1, "esta semana"
+    if days < 30:
+        return 2, "este mes"
+    return 3, "más viejas"
+
+
+# Axes the reader can fold the list along. The first element of each key is an
+# explicit order for the ordinal axes; the nominal ones return 0 and fall
+# through to being ordered by their best posting.
+GROUPS = {
+    "band": ("banda de puntaje", _by_band),
+    "category": ("categoría", _by_category),
+    "seniority": ("seniority", _by_seniority),
+    "fresh": ("frescura", _by_freshness),
+}
+
+
+def group_rows(rows: list[dict], axis: str, names: dict) -> list[tuple[str, list[dict]]] | None:
+    """Fold rows along one axis, best group first. None means "do not group".
+
+    Groups are ordered by their explicit rank and then by the best posting
+    inside them, so folding never buries the top of the ranking under a group
+    that happens to sort first alphabetically.
+    """
+    entry = GROUPS.get(axis)
+    if entry is None:
+        return None
+    _, key_of = entry
+
+    buckets: dict[tuple[int, str], list[dict]] = {}
+    for row in rows:
+        buckets.setdefault(key_of(row, names), []).append(row)
+
+    return [
+        (label, items)
+        for (_, label), items in sorted(
+            buckets.items(),
+            key=lambda kv: (kv[0][0], -max(r["score"] for r in kv[1]), kv[0][1]),
+        )
+    ]
+
 
 # --------------------------------------------------------------------------
 # formatting
@@ -213,6 +289,19 @@ tfoot th, tfoot td { font-weight: 700; border-bottom: none; }
 details { margin-top: 2rem; }
 summary { cursor: pointer; font-weight: 600; padding: .5rem 0; }
 details ul { color: var(--muted); }
+details.grp {
+  margin: 0 0 .85rem; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 10px;
+}
+details.grp > summary { padding: .8rem 1.1rem; font-size: 1.05rem; }
+details.grp[open] > summary { border-bottom: 1px solid var(--line); }
+details.grp > ol.jobs, details.grp > details.sub { margin: .85rem; }
+details.sub { margin: .85rem; }
+details.sub > summary {
+  padding: .35rem 0; font-size: .92rem; font-weight: 600; color: var(--muted);
+}
+details.sub > ol.jobs { margin-top: .6rem; }
+.count { font-weight: 400; color: var(--muted); font-size: .88rem; }
 .empty {
   background: var(--panel); border: 1px dashed var(--line);
   border-radius: 10px; padding: 2.5rem 1rem; text-align: center; color: var(--muted);
@@ -245,12 +334,49 @@ def page(title: str, body: str, *, refresh: int = 0) -> bytes:
 </html>""".encode("utf-8")
 
 
+def _options(choices: list[tuple[str, str]], current: str) -> str:
+    return "".join(
+        f'<option value="{e(value)}"{" selected" if current == value else ""}>{e(label)}</option>'
+        for value, label in choices
+    )
+
+
+def group_axes(params: dict) -> tuple[str, str]:
+    """The two folding axes in effect, defaulted and de-duplicated.
+
+    Grouping twice along the same axis would produce one subgroup per group
+    holding everything, which is noise dressed as structure, so the second
+    axis drops out when it repeats the first.
+    """
+    axis = params.get("group", "band")
+    sub = params.get("sub", "category")
+    if axis not in GROUPS:
+        axis = "" if "group" in params else "band"
+    if sub == axis or sub not in GROUPS:
+        sub = ""
+    return axis, sub
+
+
 def render_filters(params: dict, total: int, showing: int) -> str:
     current = params.get("sort") or "score"
     options = "".join(
         f'<option value="{k}"{" selected" if current == k else ""}>{e(label)}</option>'
         for k, (label, _) in SORTS.items()
     )
+    axis, sub = group_axes(params)
+    axis_choices = [("", "sin agrupar")] + [(k, label) for k, (label, _) in GROUPS.items()]
+    sub_choices = [("", "sin subgrupo")] + [
+        (k, label) for k, (label, _) in GROUPS.items() if k != axis
+    ]
+    grouping = f"""
+  <div class="field">
+    <label for="f-group">Agrupar por</label>
+    <select id="f-group" name="group">{_options(axis_choices, axis)}</select>
+  </div>
+  <div class="field">
+    <label for="f-sub">Y dentro por</label>
+    <select id="f-sub" name="sub">{_options(sub_choices, sub)}</select>
+  </div>"""
     return f"""
 <form class="bar" method="get" action="/" role="search" aria-label="Filtrar vacantes">
   <div class="field">
@@ -266,7 +392,7 @@ def render_filters(params: dict, total: int, showing: int) -> str:
   <div class="field">
     <label for="f-sort">Ordenar por</label>
     <select id="f-sort" name="sort">{options}</select>
-  </div>
+  </div>{grouping}
   <div class="field check">
     <input type="checkbox" id="f-new" name="new" value="1"{" checked" if params.get("new") else ""}>
     <label for="f-new">Solo nuevas</label>
@@ -304,6 +430,61 @@ def render_job_card(row: dict, top: float, seniority: dict) -> str:
 </li>"""
 
 
+def render_cards(rows: list[dict], top: float, names: dict) -> str:
+    return (
+        '<ol class="jobs">'
+        + "".join(render_job_card(r, top, names) for r in rows)
+        + "</ol>"
+    )
+
+
+def render_listing(rows: list[dict], params: dict, top: float, names: dict) -> str:
+    """The ranked rows, optionally folded into collapsible groups.
+
+    Groups are plain `<details>`: a native disclosure widget every screen reader
+    already announces as expandable, with no state to track and no script. The
+    count lives in the summary text rather than in styling alone, so folding a
+    group never hides how much is inside it.
+    """
+    if not rows:
+        return (
+            '<div class="empty"><p>Ninguna vacante coincide con ese filtro.</p>'
+            '<p><a href="/">Ver todas</a></p></div>'
+        )
+
+    axis, sub = group_axes(params)
+    groups = group_rows(rows, axis, names)
+    if groups is None:
+        return render_cards(rows, top, names)
+
+    out, opened = [], 0
+    for label, items in groups:
+        # A group opens only if it fits inside what is left of the budget, not
+        # merely because the budget was not spent yet — checking before adding
+        # let a 25-posting group through on the strength of 13 already shown,
+        # which is the scroll this was meant to remove. The first group always
+        # opens regardless: a page that loads fully folded hides the best
+        # posting of the day behind a click. `opened` counts skipped groups too,
+        # so the fold line is one cut rather than an open group under a closed.
+        is_open = opened == 0 or opened + len(items) <= OPEN_UNTIL
+        opened += len(items)
+
+        inner = render_cards(items, top, names)
+        if sub:
+            inner = "".join(
+                f'<details class="sub" open><summary>{e(sub_label)} '
+                f'<span class="count">({len(sub_items)})</span></summary>'
+                f"{render_cards(sub_items, top, names)}</details>"
+                for sub_label, sub_items in (group_rows(items, sub, names) or [])
+            )
+        out.append(
+            f'<details class="grp"{" open" if is_open else ""}>'
+            f'<summary><span class="grp-name">{e(label)}</span> '
+            f'<span class="count">{len(items)} vacantes</span></summary>{inner}</details>'
+        )
+    return "".join(out)
+
+
 def render_index(result: scan.Result | None, params: dict, running: bool) -> bytes:
     if result is None:
         return page(
@@ -319,14 +500,7 @@ def render_index(result: scan.Result | None, params: dict, running: bool) -> byt
 
     rows = apply_filters(result.jobs, params)
     top = max((r["score"] for r in result.jobs), default=0.0)
-    listing = (
-        '<ol class="jobs">'
-        + "\n".join(render_job_card(r, top, result.seniority_names) for r in rows)
-        + "</ol>"
-        if rows
-        else '<div class="empty"><p>Ninguna vacante coincide con ese filtro.</p>'
-        '<p><a href="/">Ver todas</a></p></div>'
-    )
+    listing = render_listing(rows, params, top, result.seniority_names)
 
     dropped = ""
     if result.dropped:
