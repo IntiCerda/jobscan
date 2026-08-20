@@ -14,10 +14,33 @@ python -m jobscan --new-only      # only postings unseen until now
 python -m jobscan --explain       # show the score breakdown per posting
 python -m jobscan --no-semantic   # keyword scoring only
 python -m jobscan -o hoy.md       # write the report to a file
+python -m jobscan --serve         # the same ranking in the browser
 ```
 
 No dependencies. `urllib`, `sqlite3`, `tomllib`, `array`, `math` — a bare
 Python 3.11+ install runs it.
+
+---
+
+## The browser view
+
+`--serve` opens the same ranking at `http://127.0.0.1:8787` — filter by title
+or stack term, set a score floor, show only what is new, reorder by freshness
+or by how crowded a posting is, and open any posting to see which weight
+produced its score. The "barrer de nuevo" button runs a sweep in the
+background and streams the log to a page that refreshes itself.
+
+It is the standard library too: `http.server`, HTML rendered server-side, and
+**no JavaScript at all**. Filtering is a GET form; progress is a `meta refresh`.
+That is not minimalism for its own sake — it is what makes the page work in a
+screen reader, at 200% zoom, over keyboard, and in forced-colours mode without
+a single `aria-live` region hoping to be announced. A terminal UI would have
+had to reimplement each of those, badly.
+
+The page opens on the **last stored scan**, instantly. A sweep costs minutes of
+network and embedding; asking the reader to wait for a fresh answer to
+yesterday's question is how a tool stops getting opened. Finished runs are kept
+whole in the `runs` table, the last five of them.
 
 ---
 
@@ -96,17 +119,25 @@ profile.toml        everything personal — stack, vetoes, weights, target pay
 jobscan/api.py      Get on Board client, JSON:API flattened to a Job
 jobscan/embed.py    Embedder port, Ollama adapter, null adapter, cosine
 jobscan/scoring.py  knockouts + weighted score
-jobscan/store.py    SQLite: what has been seen, cached vectors
-jobscan/cli.py      orchestration and the markdown report
-tests/              the filtering and ranking rules
+jobscan/store.py    SQLite: what has been seen, cached vectors, finished runs
+jobscan/scan.py     the pipeline — sweep, filter, rank, persist
+jobscan/cli.py      the markdown report
+jobscan/web.py      the browser view: local server, HTML, no JavaScript
+tests/              the filtering and ranking rules, and the UI's quiet failures
 ```
+
+`scan.py` exists so there is exactly one pipeline. It returns plain dicts
+rather than objects because a run is stored as JSON between sessions —
+`cli.py` renders that to markdown and `web.py` renders the same thing to HTML.
+Neither owns the ranking.
 
 The code holds no opinions about any particular person: the stack, the vetoes,
 the weights and the prose summary all live in `profile.toml`. Point it at a
 different profile and it ranks for someone else.
 
 ```bash
-python tests/test_scoring.py      # or: python -m pytest tests/ -q
+python tests/test_scoring.py      # knockouts and ranking
+python tests/test_web.py          # escaping, filters, labels, the live server
 ```
 
 ## Tuning
