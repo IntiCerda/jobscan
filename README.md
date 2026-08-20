@@ -144,5 +144,7 @@ python tests/test_web.py          # escaping, filters, labels, the live server
 
 Run with `--explain` and read the breakdown. If postings you like sit below
 ones you don't, the weights in `[scoring]` are wrong for you — that is the
-knob, not the code. Terms in `[fit.stack]` are matched as plain substrings
-against the whole posting, so `node` also matches `Node.js`.
+knob, not the code. Terms in `[fit.stack]` match at a word boundary and allow a
+trailing suffix, so `node` matches `Node.js` and `embedding` matches
+`embeddings` — but `rag` does not match `fragmented`, which is how a Digital
+Marketing posting once earned the full RAG bonus.
