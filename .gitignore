@@ -3,6 +3,10 @@
 .jobscan.sqlite3
 *.sqlite3
 
+# Personal: the pasted CV and the profile backup the web UI keeps.
+cv.txt
+*.toml.bak
+
 # Generated reports
 *.md
 !README.md

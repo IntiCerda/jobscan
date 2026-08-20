@@ -99,10 +99,23 @@ def _row(job: api.Job, sc, *, is_new: bool) -> dict:
     }
 
 
+def identity_text(profile: dict, cv: str = "") -> str:
+    """What the semantic layer compares every posting against.
+
+    The CV is appended to the summary rather than replacing it: the summary
+    says what the person wants, the CV says what they have done, and a posting
+    should resonate with both. The embedder truncates long input itself.
+    """
+    summary = profile.get("identity", {}).get("summary", "").strip()
+    cv = cv.strip()
+    return f"{summary}\n\n{cv}".strip() if cv else summary
+
+
 def run(
     *,
     profile: dict,
     db: Path,
+    cv: str = "",
     no_semantic: bool = False,
     on_progress: Callable[[str], None] | None = None,
 ) -> Result:
@@ -153,9 +166,7 @@ def run(
         known = store.known_ids()
 
         profile_vector = (
-            embedder.embed(profile.get("identity", {}).get("summary", ""))
-            if semantic_on
-            else None
+            embedder.embed(identity_text(profile, cv)) if semantic_on else None
         )
         if semantic_on and profile_vector is None:
             # The profile is what everything is compared against; without it the

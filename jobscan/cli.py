@@ -18,6 +18,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from .profiles import load_cv
 from .scan import DEFAULT_DB, DEFAULT_PROFILE, Result, age_days, load_profile, run
 
 
@@ -126,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
     result = run(
         profile=load_profile(args.profile),
         db=args.db,
+        cv=load_cv(args.profile),
         no_semantic=args.no_semantic,
         on_progress=lambda line: print(line, file=sys.stderr),
     )
