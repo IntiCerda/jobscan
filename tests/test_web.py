@@ -328,11 +328,14 @@ def test_the_palette_stays_readable_in_both_schemes():
         scheme = "oscuro" if dark else "claro"
         pairs = [
             ("texto sobre el fondo", p["ink"], p["bg"]),
-            ("texto apagado sobre el panel", p["muted"], p["panel"]),
-            ("enlaces sobre el panel", p["accent"], p["panel"]),
-            ("texto del botón", p["accent-ink"], p["accent"]),
-            ("la etiqueta NUEVA", p["new"], p["new-bg"]),
-            ("la etiqueta OJO", p["warn"], p["warn-bg"]),
+            ("texto secundario sobre superficie", p["ink-2"], p["surface"]),
+            ("texto terciario sobre el fondo", p["ink-3"], p["bg"]),
+            ("texto terciario sobre superficie", p["ink-3"], p["surface"]),
+            ("la señal como texto sobre el fondo", p["signal"], p["bg"]),
+            ("la señal como texto sobre superficie", p["signal"], p["surface"]),
+            ("texto del botón y la etiqueta NUEVA", p["signal-ink"], p["signal"]),
+            ("chips de coincidencia", p["signal"], p["signal-soft"]),
+            ("chips de advertencia", p["amber"], p["amber-bg"]),
         ]
         for label, fg, bg in pairs:
             got = contrast(fg, bg)
@@ -356,6 +359,146 @@ def test_the_page_keeps_its_landmarks_and_language():
     check("the document declares its language", parser.lang == "es")
     check("there is a main landmark to skip to", "main" in parser.ids)
     check("and a skip link that targets it", "#main" in parser.links)
+
+
+# -- profile and cv ---------------------------------------------------------
+
+
+def test_the_profile_survives_the_form_round_trip():
+    # The form rewrites profile.toml. A field it silently drops or mangles is a
+    # tuning someone made by hand, gone without an error — so the whole cycle
+    # dict -> TOML -> dict has to be lossless for every shape a profile uses.
+    import tomllib
+
+    from jobscan import profiles
+
+    original = tomllib.loads(Path("profile.toml").read_text(encoding="utf-8"))
+    check("the emitted TOML parses back to the same profile",
+          tomllib.loads(profiles.dumps(original)) == original)
+
+    tricky = {
+        "identity": {"summary": 'línea 1\ncon "comillas" y \\barras'},
+        "fit": {"stack": {"next.js": 2.0, "búsqueda semántica": 3.5}},
+    }
+    check("quoted keys and multiline strings survive",
+          tomllib.loads(profiles.dumps(tricky)) == tricky)
+
+
+def test_a_broken_form_never_touches_the_file():
+    # The one honest failure mode of a settings form: half-understanding the
+    # input and writing that. Any error must block the save entirely.
+    from jobscan import profiles
+
+    form = {
+        "summary": ["dev"], "queries": ["python"], "category": ["programming"],
+        "stack": ["python = tres"],  # unreadable weight
+        "weight_stack": ["catorce"],  # unreadable number
+    }
+    _, errors = profiles.from_form(form)
+    check("the bad weight is reported by line", any("python = tres" in e for e in errors))
+    check("the bad number names its field", any("weight_stack" in e for e in errors))
+
+    empty_queries = {"summary": ["dev"], "queries": [""], "stack": ["python = 3"]}
+    _, errors = profiles.from_form(empty_queries)
+    check("no queries is an error, not an empty sweep", any("búsqueda" in e for e in errors))
+
+
+def test_a_valid_form_writes_a_profile_the_scanner_can_read():
+    import tomllib
+
+    from jobscan import profiles
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "profile.toml"
+        form = {
+            "summary": ["backend con Python"],
+            "queries": ["python\nbackend"],
+            "category": ["programming"], "remote_only": ["1"], "max_pages": ["2"],
+            "stack": ["python = 3\nfastapi"],
+            "exclude_in_title": ["oracle"], "penalize_in_body": ["spring boot"],
+            "allowed_categories": ["Programming"], "exclude_langs": ["en"],
+            "exclude_flags": ["talent_pool", "not_really_remote"],
+            "weight_stack": ["14"], "weight_semantic": ["12"],
+            "weight_competition": ["8"], "weight_freshness": ["5"],
+            "weight_salary": ["3"], "weight_seniority": ["4"],
+            "stack_half_point": ["12"], "good_applications_count": ["100"],
+            "stale_after_days": ["45"], "target_salary_usd": ["2000"],
+            "seniority_fit": ["2", "3"], "seniority_reach": ["4"],
+        }
+        profile, errors = profiles.from_form(form)
+        check("a complete form has no errors", errors == [])
+        profiles.save(profile, path)
+        back = tomllib.loads(path.read_text(encoding="utf-8"))
+        check("queries land as a list", back["search"]["queries"] == ["python", "backend"])
+        check("a term without weight defaults", back["fit"]["stack"]["fastapi"] == 2.0)
+        check("flags land from the checkboxes",
+              back["filters"]["exclude_flags"] == ["talent_pool", "not_really_remote"])
+        check("seniority ids land as ints", back["seniority"]["fit"] == [2, 3])
+
+        profiles.save(profile, path)
+        check("saving keeps a backup of the previous file",
+              path.with_suffix(".toml.bak").exists())
+
+
+def test_the_cv_reaches_the_semantic_reference():
+    # A CV that saves fine but never reaches the embedding is the quiet
+    # failure: the page says "guardado" and the ranking ignores it forever.
+    from jobscan import profiles
+    from jobscan.scan import identity_text
+
+    with tempfile.TemporaryDirectory() as tmp:
+        prof = Path(tmp) / "profile.toml"
+        profiles.save_cv(prof, "  Trabajé en pagos con FastAPI  ")
+        check("the cv round-trips through its file",
+              profiles.load_cv(prof) == "Trabajé en pagos con FastAPI")
+
+        text = identity_text({"identity": {"summary": "Backend dev"}}, profiles.load_cv(prof))
+        check("summary and cv are both in the reference",
+              "Backend dev" in text and "FastAPI" in text)
+        check("without a cv the summary stands alone",
+              identity_text({"identity": {"summary": "Backend dev"}}, "") == "Backend dev")
+
+
+def test_the_settings_pages_answer_and_keep_their_labels():
+    from jobscan import profiles as profiles_mod
+
+    prof_page = web.render_profile_page(
+        {"identity": {}, "search": {}, "filters": {}, "scoring": {}, "fit": {}, "seniority": {}},
+        profiles_mod.SENIORITY_FALLBACK,
+    ).decode()
+    parser = _Controls()
+    parser.feed(prof_page)
+    check("the profile form is fully labelled",
+          all(cid in parser.labelled for _, cid in parser.controls if cid))
+    check("no control is missing its id", all(cid for _, cid in parser.controls))
+
+    errors_page = web.render_profile_page(
+        {"identity": {}, "search": {}, "filters": {}, "scoring": {}, "fit": {}, "seniority": {}},
+        profiles_mod.SENIORITY_FALLBACK, errors=["'weight_stack' tiene que ser un número"],
+    ).decode()
+    check("errors are announced, not just colored", 'role="alert"' in errors_page)
+    check("and say nothing was saved", "No guardé nada" in errors_page)
+
+    cv_page = web.render_cv_page("mi cv", semantic_ready=False).decode()
+    check("the cv comes back into the textarea", ">mi cv</textarea>" in cv_page)
+    check("a missing ollama is stated, not hidden", "no está corriendo" in cv_page)
+
+
+def test_every_page_carries_the_navigation():
+    pages = {
+        "radar": web.render_index(make_result(), {}, False).decode(),
+        "perfil": web.render_profile_page(
+            {"identity": {}, "search": {}, "filters": {}, "scoring": {}, "fit": {}, "seniority": {}},
+            {"3": "Semi Senior"},
+        ).decode(),
+        "cv": web.render_cv_page("", semantic_ready=True).decode(),
+        "progreso": web.render_progress(web.ScanState()).decode(),
+    }
+    for name, html in pages.items():
+        check(f"{name} shows the nav", 'aria-label="Secciones"' in html)
+        check(f"{name} links the other sections", '/perfil' in html and '/cv' in html)
+    check("the active page is marked for assistive tech",
+          'aria-current="page"' in pages["perfil"])
 
 
 # -- concurrency ------------------------------------------------------------
@@ -410,7 +553,14 @@ def test_the_server_actually_answers():
             store.save_run(make_result().to_dict())
             store.commit()
 
-        handler = web.make_handler(profile_path=Path("profile.toml"), db=db, no_semantic=True)
+        # A copy, never the real profile: this test POSTs to /perfil and /cv,
+        # and a test that can rewrite the profile someone tuned is a landmine.
+        profile_path = Path(tmp) / "profile.toml"
+        profile_path.write_text(
+            Path("profile.toml").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+
+        handler = web.make_handler(profile_path=profile_path, db=db, no_semantic=True)
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         base = f"http://127.0.0.1:{httpd.server_port}"
@@ -428,6 +578,18 @@ def test_the_server_actually_answers():
 
             with urllib.request.urlopen(f"{base}/progreso", timeout=5) as r:
                 check("the progress page answers 200", r.status == 200)
+
+            with urllib.request.urlopen(f"{base}/perfil", timeout=5) as r:
+                check("the profile page answers 200", r.status == 200)
+                check("and carries the stack from the file", "fastapi" in r.read().decode())
+
+            body = urllib.parse.urlencode({"cv": "Mi experiencia real"}).encode()
+            req = urllib.request.Request(f"{base}/cv", data=body, method="POST")
+            with urllib.request.urlopen(req, timeout=5) as r:
+                check("posting a cv lands back on the cv page", r.status == 200)
+            check("and the cv landed beside the profile",
+                  (Path(tmp) / "cv.txt").read_text(encoding="utf-8").strip()
+                  == "Mi experiencia real")
 
             try:
                 urllib.request.urlopen(f"{base}/no-existe", timeout=5)

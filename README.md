@@ -24,33 +24,40 @@ Python 3.11+ install runs it.
 
 ## The browser view
 
-`--serve` opens the same ranking at `http://127.0.0.1:8787` — filter by title
-or stack term, set a score floor, show only what is new, reorder by freshness
-or by how crowded a posting is, and open any posting to see which weight
-produced its score. The "barrer de nuevo" button runs a sweep in the
-background and streams the log to a page that refreshes itself.
+`--serve` opens the tool at `http://127.0.0.1:8787` — not just the ranking,
+the whole thing:
 
-Sixty-odd postings is a long scroll, so the list folds. By default it groups
-into score bands with the posting's own category inside, each one a plain
-`<details>` you can collapse. Groups open from the top down until roughly
-fifteen postings are showing and the rest arrive folded — the first group
-always opens, because a page that loads fully collapsed hides the best posting
-of the day behind a click. Both levels are yours to change: group by category,
-seniority or freshness instead, or turn folding off entirely. Groups are
-ordered by their best posting, so folding never buries the top of the ranking
-under a group that merely sorts first alphabetically.
+- **Radar** — the ranked list, folded into score bands you can collapse,
+  filterable by title or stack term, floor score, freshness or how crowded a
+  posting already is. Every posting opens into its score breakdown.
+- **Perfil** — everything in `profile.toml`, editable from a form: your
+  summary, the query sweep, stack terms and weights, vetoes, scoring weights,
+  seniority. It writes the same file the CLI reads, keeps a `.bak` of the
+  previous version, and refuses to save anything it only half-understood.
+  This is what makes the repo usable by someone who is not you.
+- **CV** — paste it as plain text. It lands in `cv.txt` beside the profile
+  (gitignored), gets embedded together with your summary, and every posting
+  is compared against both: the summary says what you want, the CV says what
+  you have done.
 
-It is the standard library too: `http.server`, HTML rendered server-side, and
-**no JavaScript at all**. Filtering is a GET form; progress is a `meta refresh`.
-That is not minimalism for its own sake — it is what makes the page work in a
-screen reader, at 200% zoom, over keyboard, and in forced-colours mode without
-a single `aria-live` region hoping to be announced. A terminal UI would have
-had to reimplement each of those, badly.
+The design commits to what the tool is — a signals room. Graphite surfaces, a
+single phosphor-green accent that only ever means signal (a strong match, a
+new posting), amber only ever meaning caution, and every piece of data set in
+monospace like telemetry. Depth is borders only; hierarchy is weight and
+color before size.
 
-The page opens on the **last stored scan**, instantly. A sweep costs minutes of
-network and embedding; asking the reader to wait for a fresh answer to
-yesterday's question is how a tool stops getting opened. Finished runs are kept
-whole in the `runs` table, the last five of them.
+It is still the standard library with **no JavaScript at all**: filtering is
+a GET form, scan progress is a page that refreshes itself, folded groups are
+native `<details>`. That is not minimalism for its own sake — it is what
+makes every page work in a screen reader, at 200% zoom, over keyboard and in
+forced-colors mode without a single `aria-live` region hoping to be
+announced. Palette contrast is asserted against WCAG AA in the tests, in
+both color schemes.
+
+The page opens on the **last stored scan**, instantly. A sweep costs minutes
+of network and embedding; asking the reader to wait for a fresh answer to
+yesterday's question is how a tool stops getting opened. Finished runs are
+kept whole in the `runs` table, the last five of them.
 
 ---
 
@@ -131,8 +138,9 @@ jobscan/embed.py    Embedder port, Ollama adapter, null adapter, cosine
 jobscan/scoring.py  knockouts + weighted score
 jobscan/store.py    SQLite: what has been seen, cached vectors, finished runs
 jobscan/scan.py     the pipeline — sweep, filter, rank, persist
+jobscan/profiles.py profile.toml read/write, the CV, the settings form
 jobscan/cli.py      the markdown report
-jobscan/web.py      the browser view: local server, HTML, no JavaScript
+jobscan/web.py      the front end: server, pages, stylesheet — no JavaScript
 tests/              the filtering and ranking rules, and the UI's quiet failures
 ```
 

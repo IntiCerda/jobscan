@@ -1,15 +1,19 @@
-"""A local web UI over the same scan the CLI reports.
+"""The local front end: ranking, profile and CV, served from the stdlib.
+
+Design direction — a signals room. The product is a radar that sweeps a job
+board and reports signal strength, and the interface commits to that world:
+graphite surfaces, a single phosphor-green accent that only ever means signal
+(a strong match, a new posting), amber only ever meaning caution, and every
+piece of data — scores, salaries, counts, the sweep log — set in monospace
+like telemetry, while prose stays in the text face. Depth is borders only, a
+few percent of white or black; hierarchy is done with weight and color before
+size. One accent, one depth strategy, one density.
 
 Why a browser and not a terminal UI: the browser is already the accessible
-surface. Screen readers, 200% zoom, keyboard navigation, forced colours and the
-reader's own font size all work without this file asking for them. A curses
-layer would have to reimplement each one, badly.
-
-Why no JavaScript: filtering is a GET form and scan progress is a page that
-refreshes itself. Both are understood by every assistive technology without a
-single aria-live region hoping to be announced. It is also the smaller program.
-
-Only the standard library is used, in keeping with the rest of the tool.
+surface — screen readers, zoom, keyboard, forced colors all work without this
+file asking. Why no JavaScript: filtering is a GET form and progress is a page
+that refreshes itself, which every assistive technology understands without a
+single aria-live region hoping to be announced.
 
     python -m jobscan --serve
 """
@@ -25,7 +29,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import scan
+from . import embed, profiles, scan
 
 # Orderings the reader can ask for. Freshness and competition are offered
 # because they answer questions the total score blurs together: "what appeared
@@ -46,22 +50,21 @@ PART_LABELS = {
 }
 
 # Postings kept open when the page loads, counting from the top group down.
-# Sixty-four cards is a long scroll; one collapsed page that hides the best
-# posting of the day is worse. This opens groups until roughly a screenful of
-# ranking is visible and folds the rest away.
+# Sixty-four rows is a long scroll; one collapsed page that hides the best
+# posting of the day is worse. Groups open until roughly a screenful of
+# ranking is visible and the rest arrive folded.
 OPEN_UNTIL = 15
 
 
 def _by_band(row, _names) -> tuple[int, str]:
-    """Ordinal, so the bands read high to low no matter what is inside them."""
     total = row["score"]
     if total >= 25:
-        return 0, "25 puntos o más"
+        return 0, "señal fuerte · 25+"
     if total >= 20:
-        return 1, "20 a 25 puntos"
+        return 1, "señal buena · 20–25"
     if total >= 15:
-        return 2, "15 a 20 puntos"
-    return 3, "menos de 15 puntos"
+        return 2, "señal media · 15–20"
+    return 3, "señal débil · <15"
 
 
 def _by_category(row, _names) -> tuple[int, str]:
@@ -69,8 +72,6 @@ def _by_category(row, _names) -> tuple[int, str]:
 
 
 def _by_seniority(row, names) -> tuple[int, str]:
-    # Ordered by the API's own seniority ids, which run junior to expert, so the
-    # groups read as a progression rather than alphabetically.
     sid = row.get("seniority_id")
     return (sid if sid is not None else 99), names.get(str(sid), "sin nivel")
 
@@ -86,9 +87,6 @@ def _by_freshness(row, _names) -> tuple[int, str]:
     return 3, "más viejas"
 
 
-# Axes the reader can fold the list along. The first element of each key is an
-# explicit order for the ordinal axes; the nominal ones return 0 and fall
-# through to being ordered by their best posting.
 GROUPS = {
     "band": ("banda de puntaje", _by_band),
     "category": ("categoría", _by_category),
@@ -122,6 +120,22 @@ def group_rows(rows: list[dict], axis: str, names: dict) -> list[tuple[str, list
     ]
 
 
+def group_axes(params: dict) -> tuple[str, str]:
+    """The two folding axes in effect, defaulted and de-duplicated.
+
+    Grouping twice along the same axis would produce one subgroup per group
+    holding everything — noise dressed as structure — so the second axis
+    drops out when it repeats the first.
+    """
+    axis = params.get("group", "band")
+    sub = params.get("sub", "category")
+    if axis not in GROUPS:
+        axis = "" if "group" in params else "band"
+    if sub == axis or sub not in GROUPS:
+        sub = ""
+    return axis, sub
+
+
 # --------------------------------------------------------------------------
 # formatting
 # --------------------------------------------------------------------------
@@ -130,8 +144,8 @@ def group_rows(rows: list[dict], axis: str, names: dict) -> list[tuple[str, list
 def e(value) -> str:
     """Escape for HTML text and attributes.
 
-    Every string on the page comes from a third-party API. A posting titled
-    `Dev <script>` has to render as that title, not run as one.
+    Every string on the page comes from a third-party API or a form. A posting
+    titled `Dev <script>` has to render as that title, not run as one.
     """
     return html.escape(str(value), quote=True)
 
@@ -141,7 +155,7 @@ def fmt_age(published_at: str | None) -> str:
         return "sin fecha"
     days = scan.age_days(published_at)
     if days < 1:
-        return "publicada hoy"
+        return "hoy"
     if days < 2:
         return "ayer"
     if days < 60:
@@ -152,15 +166,15 @@ def fmt_age(published_at: str | None) -> str:
 def fmt_salary(row: dict) -> str:
     lo, hi = row.get("min_salary"), row.get("max_salary")
     if lo and hi:
-        return f"US${lo:,}-{hi:,}"
+        return f"${lo:,}–{hi:,}"
     if lo or hi:
-        return f"US${(hi or lo):,}"
-    return "no publicado"
+        return f"${(hi or lo):,}"
+    return "sin sueldo"
 
 
 def fmt_when(iso: str) -> str:
     try:
-        return datetime.fromisoformat(iso).astimezone().strftime("%d/%m/%Y %H:%M")
+        return datetime.fromisoformat(iso).astimezone().strftime("%d/%m %H:%M")
     except (ValueError, TypeError):
         return "—"
 
@@ -206,115 +220,346 @@ def apply_filters(rows: list[dict], params: dict) -> list[dict]:
 
 
 # --------------------------------------------------------------------------
-# pages
+# the stylesheet
 # --------------------------------------------------------------------------
 
 CSS = """
 :root {
   color-scheme: light dark;
-  --bg: #fbfbfa; --panel: #ffffff; --ink: #14161a; --muted: #545a63;
-  --line: #d7dae0; --accent: #1f4fd8; --accent-ink: #ffffff;
-  --new: #0a5530; --new-bg: #d8f2e4; --warn: #6f3705; --warn-bg: #fcecd6;
-  --bar: #ccd6f4;
+  --bg: #f5f6f7;
+  --surface: #ffffff;
+  --surface-2: #eef0f2;
+  --ink: #17191d;
+  --ink-2: #55606b;
+  --ink-3: #68717d;
+  --line: rgba(15, 23, 32, 0.09);
+  --line-2: rgba(15, 23, 32, 0.05);
+  --signal: #0b7a4b;
+  --signal-ink: #f2fbf6;
+  --signal-soft: #e2f3ea;
+  --amber: #7d4a10;
+  --amber-bg: #f8ecda;
+  --focus: #0b7a4b;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #14161a; --panel: #1c1f25; --ink: #eceef1; --muted: #a7aeb9;
-    --line: #333842; --accent: #9db8ff; --accent-ink: #10131a;
-    --new: #90e2b8; --new-bg: #10321f; --warn: #f3c68f; --warn-bg: #3a2a12;
-    --bar: #2f3d63;
+    --bg: #0e1114;
+    --surface: #14181d;
+    --surface-2: #0b0e11;
+    --ink: #e7ebee;
+    --ink-2: #98a2ad;
+    --ink-3: #7d8894;
+    --line: rgba(255, 255, 255, 0.09);
+    --line-2: rgba(255, 255, 255, 0.05);
+    --signal: #3ecf8e;
+    --signal-ink: #07130d;
+    --signal-soft: #10281c;
+    --amber: #e3b077;
+    --amber-bg: #2e2210;
+    --focus: #3ecf8e;
   }
 }
+
 * { box-sizing: border-box; }
+html { -webkit-font-smoothing: antialiased; }
 body {
   margin: 0; background: var(--bg); color: var(--ink);
-  font: 1rem/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 400 14px/1.55 "Segoe UI", system-ui, -apple-system, sans-serif;
 }
-.wrap { max-width: 56rem; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
-a { color: var(--accent); }
-a:focus-visible, button:focus-visible, input:focus-visible,
-select:focus-visible, summary:focus-visible {
-  outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 3px;
+code, .mono, .meta, .score, .rank, .count, .chip, .bars-n, .log, .badge, .stat {
+  font-family: "Cascadia Code", "Cascadia Mono", ui-monospace, "SF Mono",
+    "JetBrains Mono", Consolas, monospace;
 }
+a { color: inherit; }
+h1, h2, h3 { text-wrap: balance; }
+p { text-wrap: pretty; }
+:is(a, button, input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px;
+}
+::selection { background: var(--signal-soft); }
+
 .skip {
-  position: absolute; left: -9999px; top: 0; z-index: 9;
-  background: var(--panel); color: var(--ink); padding: .6rem 1rem;
+  position: absolute; left: -9999px; top: 0; z-index: 99;
+  background: var(--surface); color: var(--ink); padding: 8px 14px;
   border: 1px solid var(--line); border-radius: 6px;
 }
-.skip:focus { left: .5rem; top: .5rem; }
-header h1 { font-size: 1.55rem; margin: 0 0 .3rem; line-height: 1.25; }
-.sub { color: var(--muted); margin: 0 0 1rem; }
-.bar {
-  display: flex; flex-wrap: wrap; gap: .8rem; align-items: flex-end;
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: 10px; padding: 1rem; margin: 1.25rem 0 1.25rem;
+.skip:focus { left: 8px; top: 8px; }
+
+/* -- app shell ---------------------------------------------------------- */
+
+.app { display: grid; grid-template-columns: 216px minmax(0, 1fr); min-height: 100vh; }
+.side {
+  border-right: 1px solid var(--line);
+  padding: 20px 16px;
+  display: flex; flex-direction: column; gap: 4px;
+  position: sticky; top: 0; height: 100vh;
 }
-.field { display: flex; flex-direction: column; gap: .25rem; }
-.field label { font-size: .8rem; color: var(--muted); font-weight: 600; }
-input[type=text], input[type=number], select {
-  font: inherit; padding: .45rem .6rem; background: var(--bg);
-  color: var(--ink); border: 1px solid var(--line); border-radius: 6px;
+.brand {
+  font-family: "Cascadia Code", ui-monospace, Consolas, monospace;
+  font-size: 15px; font-weight: 600; letter-spacing: -0.01em;
+  margin: 0 8px 20px; display: flex; align-items: center; gap: 8px;
 }
-.check { flex-direction: row; align-items: center; gap: .4rem; padding-bottom: .45rem; }
-.check label { font-size: 1rem; color: var(--ink); font-weight: 400; }
-.check input { width: 1.1rem; height: 1.1rem; }
-button {
-  font: inherit; font-weight: 600; cursor: pointer; padding: .5rem 1rem;
-  border-radius: 6px; border: 1px solid var(--accent);
-  background: var(--accent); color: var(--accent-ink);
+.brand::after {
+  content: ""; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--signal);
 }
-ol.jobs { list-style: none; margin: 0; padding: 0; display: grid; gap: .85rem; }
-.job {
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: 10px; padding: 1rem 1.1rem;
+.nav-item {
+  display: block; padding: 7px 10px; border-radius: 6px;
+  color: var(--ink-2); text-decoration: none; font-weight: 500; font-size: 13.5px;
 }
-.job h2 { font-size: 1.08rem; margin: 0 0 .35rem; line-height: 1.35; }
-.score { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--ink); }
-.meter { height: 5px; border-radius: 3px; background: var(--bar); margin: .6rem 0; }
-.meter i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
-.meta { color: var(--muted); font-size: .9rem; margin: 0; }
-.meta span + span::before { content: " · "; }
-.tag {
-  display: inline-block; font-size: .75rem; font-weight: 700; letter-spacing: .03em;
-  padding: .1rem .45rem; border-radius: 4px; vertical-align: .12em;
+.nav-item:hover { color: var(--ink); background: var(--line-2); }
+.nav-item[aria-current="page"] { color: var(--ink); background: var(--surface-2); font-weight: 600; }
+.side-foot { margin-top: auto; padding: 12px 8px 0; border-top: 1px solid var(--line-2); }
+.side-foot .stat { font-size: 11px; color: var(--ink-3); margin: 0 0 10px; line-height: 1.7; }
+.side-foot .stat strong { color: var(--ink-2); font-weight: 500; }
+.sweeping {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12.5px; color: var(--signal); text-decoration: none; font-weight: 500;
 }
-.tag.new { background: var(--new-bg); color: var(--new); }
-.tag.warn { background: var(--warn-bg); color: var(--warn); }
-.terms { font-size: .88rem; margin: .5rem 0 0; }
-table { border-collapse: collapse; width: 100%; margin: .5rem 0 1.5rem; }
-caption { text-align: left; padding-bottom: .5rem; }
-th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--line); }
-td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-tfoot th, tfoot td { font-weight: 700; border-bottom: none; }
-details { margin-top: 2rem; }
-summary { cursor: pointer; font-weight: 600; padding: .5rem 0; }
-details ul { color: var(--muted); }
-details.grp {
-  margin: 0 0 .85rem; background: var(--panel);
-  border: 1px solid var(--line); border-radius: 10px;
+.sweeping::before {
+  content: ""; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--signal); animation: pulse 1.4s ease-in-out infinite;
 }
-details.grp > summary { padding: .8rem 1.1rem; font-size: 1.05rem; }
-details.grp[open] > summary { border-bottom: 1px solid var(--line); }
-details.grp > ol.jobs, details.grp > details.sub { margin: .85rem; }
-details.sub { margin: .85rem; }
+@keyframes pulse { 50% { opacity: 0.25; } }
+
+main { padding: 28px 36px 72px; max-width: 980px; }
+
+/* -- controls ----------------------------------------------------------- */
+
+button, .btn {
+  font: 500 13.5px/1 inherit; font-family: inherit; cursor: pointer;
+  padding: 9px 14px; border-radius: 6px;
+  border: 1px solid var(--signal); background: var(--signal); color: var(--signal-ink);
+  transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+button:active { transform: scale(0.97); }
+button.ghost { background: transparent; color: var(--ink-2); border-color: var(--line); }
+button.ghost:hover { color: var(--ink); border-color: var(--ink-3); }
+
+input[type=text], input[type=number], select, textarea {
+  font: inherit; font-size: 13.5px; color: var(--ink);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px;
+  padding: 8px 10px; width: 100%;
+}
+textarea { line-height: 1.6; resize: vertical; }
+input::placeholder, textarea::placeholder { color: var(--ink-3); }
+
+.field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.field > label, .field > .label {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.check { flex-direction: row; align-items: center; gap: 8px; }
+.check label {
+  font-family: inherit; font-size: 13.5px; font-weight: 400;
+  letter-spacing: 0; text-transform: none; color: var(--ink);
+}
+.check input { width: 15px; height: 15px; accent-color: var(--signal); }
+
+/* -- radar page --------------------------------------------------------- */
+
+.page-head { margin: 0 0 24px; }
+.page-head h1 { font-size: 22px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 6px; }
+.statline { font-size: 12px; color: var(--ink-2); margin: 0; }
+.statline b { color: var(--ink); font-weight: 600; }
+
+.toolbar {
+  display: grid; grid-template-columns: 1fr 96px 150px 150px 150px auto;
+  gap: 10px; align-items: end;
+  padding: 14px; margin: 0 0 8px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+}
+.toolbar .actions { display: flex; gap: 8px; align-items: center; padding-bottom: 1px; }
+.toolbar .actions a { font-size: 12.5px; color: var(--ink-2); }
+.showing { font-size: 12px; color: var(--ink-3); margin: 10px 2px 20px; }
+
+details.grp { margin: 0 0 6px; }
+details.grp > summary {
+  list-style: none; cursor: pointer; user-select: none;
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 14px 4px 10px;
+  border-bottom: 1px solid var(--line);
+}
+details.grp > summary::-webkit-details-marker { display: none; }
+details.grp > summary::before {
+  content: "▸"; font-size: 11px; color: var(--ink-3);
+  transition: transform 150ms cubic-bezier(0.23, 1, 0.32, 1);
+  align-self: center;
+}
+details.grp[open] > summary::before { transform: rotate(90deg); }
+.grp-name {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11.5px; font-weight: 600; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+details.grp > summary .count { font-size: 11.5px; color: var(--ink-3); margin-left: auto; }
+
+details.sub { margin: 6px 0 0 0; }
 details.sub > summary {
-  padding: .35rem 0; font-size: .92rem; font-weight: 600; color: var(--muted);
+  list-style: none; cursor: pointer;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px; color: var(--ink-3); padding: 8px 4px 4px 18px;
 }
-details.sub > ol.jobs { margin-top: .6rem; }
-.count { font-weight: 400; color: var(--muted); font-size: .88rem; }
+details.sub > summary::-webkit-details-marker { display: none; }
+
+/* the ledger */
+ol.jobs { list-style: none; margin: 0; padding: 0; }
+li.job {
+  display: grid; grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 4px 14px; align-items: start;
+  padding: 13px 8px 13px 4px;
+  border-bottom: 1px solid var(--line-2);
+}
+li.job:hover { background: var(--line-2); }
+.rank { font-size: 11.5px; color: var(--ink-3); padding-top: 4px; text-align: right; }
+.job-main { min-width: 0; }
+.job-main h2 { font-size: 14px; font-weight: 600; margin: 0; line-height: 1.4; }
+.job-main h2 a { text-decoration: none; }
+.job-main h2 a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.badge {
+  display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+  padding: 2px 6px; border-radius: 4px; vertical-align: 2px; margin-left: 8px;
+  background: var(--signal); color: var(--signal-ink);
+}
+.chips { margin: 5px 0 0; display: flex; flex-wrap: wrap; gap: 5px; }
+.chip {
+  font-size: 11px; color: var(--ink-2); background: var(--surface-2);
+  border: 1px solid var(--line-2); border-radius: 4px; padding: 1.5px 7px;
+}
+.chip.hit { color: var(--signal); border-color: var(--signal-soft); background: var(--signal-soft); }
+.chip.warn { color: var(--amber); background: var(--amber-bg); border-color: transparent; }
+.job-data { text-align: right; }
+.signal-row { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.score { font-size: 19px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.score.strong { color: var(--signal); }
+.bars { display: inline-flex; gap: 2.5px; align-items: flex-end; }
+.bars i { width: 4px; border-radius: 1px; background: var(--line); }
+.bars i:nth-child(1) { height: 5px; }  .bars i:nth-child(2) { height: 8px; }
+.bars i:nth-child(3) { height: 11px; } .bars i:nth-child(4) { height: 14px; }
+.bars i.on { background: var(--signal); }
+li.job .meta { font-size: 11.5px; color: var(--ink-3); margin: 4px 0 0; font-variant-numeric: tabular-nums; }
+li.job .meta b { color: var(--ink-2); font-weight: 500; }
+
 .empty {
-  background: var(--panel); border: 1px dashed var(--line);
-  border-radius: 10px; padding: 2.5rem 1rem; text-align: center; color: var(--muted);
+  border: 1px dashed var(--line); border-radius: 10px;
+  padding: 48px 24px; text-align: center; color: var(--ink-2);
 }
-pre.log {
-  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-  padding: 1rem; overflow-x: auto; white-space: pre-wrap; font-size: .9rem;
+.empty h2 { font-size: 16px; color: var(--ink); margin: 0 0 8px; }
+.steps { list-style: none; counter-reset: n; padding: 0; margin: 20px auto 24px; max-width: 380px; text-align: left; }
+.steps li { counter-increment: n; display: flex; gap: 12px; padding: 8px 0; align-items: baseline; }
+.steps li::before {
+  content: counter(n, decimal-leading-zero);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px; color: var(--signal); font-weight: 600;
 }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* -- detail page -------------------------------------------------------- */
+
+.crumb { font-size: 12.5px; margin: 0 0 18px; }
+.crumb a { color: var(--ink-2); text-decoration: none; }
+.crumb a:hover { color: var(--ink); }
+.detail-head h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.015em; margin: 0 0 10px; max-width: 40rem; }
+.detail-stats { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 14px 0 6px; }
+.detail-stats .stat { font-size: 12px; color: var(--ink-3); }
+.detail-stats .stat b { display: block; font-size: 15px; font-weight: 600; color: var(--ink); margin-top: 2px; }
+.apply { margin: 18px 0 34px; }
+.panel {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px; margin: 0 0 16px;
+}
+.panel h2 { font-size: 12px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--ink-2); margin: 0 0 14px; font-family: ui-monospace, Consolas, monospace; }
+table.parts { border-collapse: collapse; width: 100%; }
+table.parts td, table.parts th {
+  text-align: left; font-weight: 400; font-size: 13px;
+  padding: 7px 0; border-bottom: 1px solid var(--line-2);
+}
+table.parts td.num { text-align: right; font-variant-numeric: tabular-nums; width: 64px; }
+table.parts .bar { width: 42%; }
+table.parts .bar i { display: block; height: 4px; border-radius: 2px; background: var(--signal); }
+table.parts tfoot th, table.parts tfoot td { font-weight: 650; border-bottom: none; padding-top: 10px; }
+
+/* -- forms (perfil, cv) ------------------------------------------------- */
+
+.form-grid { display: grid; gap: 16px; }
+.form-grid .panel { margin: 0; display: grid; gap: 14px; }
+.cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.cols-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.hint { font-size: 12px; color: var(--ink-3); margin: -6px 0 0; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.savebar { display: flex; gap: 12px; align-items: center; margin-top: 20px; }
+.saved { font-size: 13px; color: var(--signal); font-weight: 500; }
+.errors {
+  border: 1px solid var(--amber); background: var(--amber-bg); color: var(--amber);
+  border-radius: 8px; padding: 12px 16px; margin: 0 0 16px; font-size: 13px;
+}
+.errors ul { margin: 6px 0 0; padding-left: 18px; }
+
+/* -- progress & drops --------------------------------------------------- */
+
+.log {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 18px 20px; font-size: 12.5px; line-height: 1.9; color: var(--ink-2);
+  white-space: pre-wrap; overflow-x: auto;
+}
+details.drops { margin-top: 40px; }
+details.drops summary { cursor: pointer; font-size: 13px; color: var(--ink-2); font-weight: 500; padding: 6px 0; }
+details.drops ul { color: var(--ink-3); font-size: 12.5px; line-height: 1.9; }
+details.drops a { color: var(--ink-2); }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+@media (max-width: 860px) {
+  .app { grid-template-columns: 1fr; }
+  .side { position: static; height: auto; flex-direction: row; align-items: center;
+    border-right: none; border-bottom: 1px solid var(--line); padding: 12px 16px; }
+  .brand { margin: 0 12px 0 0; }
+  .side-foot { margin: 0 0 0 auto; border: none; padding: 0; }
+  .side-foot .stat { display: none; }
+  main { padding: 20px 16px 60px; }
+  .toolbar { grid-template-columns: 1fr 1fr; }
+  li.job { grid-template-columns: minmax(0, 1fr) auto; }
+  .rank { display: none; }
+  .cols-3 { grid-template-columns: 1fr; }
+}
 """
 
+# --------------------------------------------------------------------------
+# shell
+# --------------------------------------------------------------------------
 
-def page(title: str, body: str, *, refresh: int = 0) -> bytes:
+NAV = [("/", "Radar"), ("/perfil", "Perfil"), ("/cv", "CV")]
+
+
+def shell(
+    title: str,
+    body: str,
+    *,
+    active: str = "",
+    last_sweep: str | None = None,
+    running: bool = False,
+    refresh: int = 0,
+) -> bytes:
+    nav = "".join(
+        f'<a class="nav-item" href="{href}"'
+        + (' aria-current="page"' if href == active else "")
+        + f">{label}</a>"
+        for href, label in NAV
+    )
+    if running:
+        action = '<a class="sweeping" href="/progreso">barriendo…</a>'
+    else:
+        action = (
+            '<form method="post" action="/scan">'
+            '<button type="submit">Barrer ahora</button></form>'
+        )
+    sweep_line = (
+        f'<p class="stat">último barrido<br><strong>{e(last_sweep)}</strong></p>'
+        if last_sweep
+        else '<p class="stat">sin barridos todavía</p>'
+    )
     head = f'<meta http-equiv="refresh" content="{refresh}">' if refresh else ""
     return f"""<!doctype html>
 <html lang="es">
@@ -327,11 +572,26 @@ def page(title: str, body: str, *, refresh: int = 0) -> bytes:
 </head>
 <body>
 <a class="skip" href="#main">Saltar al contenido</a>
-<div class="wrap">
+<div class="app">
+<nav class="side" aria-label="Secciones">
+  <div class="brand">jobscan</div>
+  {nav}
+  <div class="side-foot">
+    {sweep_line}
+    {action}
+  </div>
+</nav>
+<main id="main">
 {body}
+</main>
 </div>
 </body>
 </html>""".encode("utf-8")
+
+
+# --------------------------------------------------------------------------
+# radar page
+# --------------------------------------------------------------------------
 
 
 def _options(choices: list[tuple[str, str]], current: str) -> str:
@@ -341,99 +601,85 @@ def _options(choices: list[tuple[str, str]], current: str) -> str:
     )
 
 
-def group_axes(params: dict) -> tuple[str, str]:
-    """The two folding axes in effect, defaulted and de-duplicated.
-
-    Grouping twice along the same axis would produce one subgroup per group
-    holding everything, which is noise dressed as structure, so the second
-    axis drops out when it repeats the first.
-    """
-    axis = params.get("group", "band")
-    sub = params.get("sub", "category")
-    if axis not in GROUPS:
-        axis = "" if "group" in params else "band"
-    if sub == axis or sub not in GROUPS:
-        sub = ""
-    return axis, sub
-
-
 def render_filters(params: dict, total: int, showing: int) -> str:
     current = params.get("sort") or "score"
-    options = "".join(
-        f'<option value="{k}"{" selected" if current == k else ""}>{e(label)}</option>'
-        for k, (label, _) in SORTS.items()
-    )
+    sort_options = _options([(k, label) for k, (label, _) in SORTS.items()], current)
     axis, sub = group_axes(params)
-    axis_choices = [("", "sin agrupar")] + [(k, label) for k, (label, _) in GROUPS.items()]
-    sub_choices = [("", "sin subgrupo")] + [
-        (k, label) for k, (label, _) in GROUPS.items() if k != axis
-    ]
-    grouping = f"""
+    axis_options = _options(
+        [("", "sin agrupar")] + [(k, label) for k, (label, _) in GROUPS.items()], axis
+    )
+    sub_options = _options(
+        [("", "sin subgrupo")] + [(k, label) for k, (label, _) in GROUPS.items() if k != axis],
+        sub,
+    )
+    return f"""
+<form class="toolbar" method="get" action="/" role="search" aria-label="Filtrar vacantes">
+  <div class="field">
+    <label for="f-q">Buscar</label>
+    <input type="text" id="f-q" name="q" value="{e(params.get("q") or "")}"
+           placeholder="título o término del stack">
+  </div>
+  <div class="field">
+    <label for="f-min">Mínimo</label>
+    <input type="number" id="f-min" name="min" value="{e(params.get("min") or "")}" step="1" min="0">
+  </div>
+  <div class="field">
+    <label for="f-sort">Orden</label>
+    <select id="f-sort" name="sort">{sort_options}</select>
+  </div>
   <div class="field">
     <label for="f-group">Agrupar por</label>
-    <select id="f-group" name="group">{_options(axis_choices, axis)}</select>
+    <select id="f-group" name="group">{axis_options}</select>
   </div>
   <div class="field">
     <label for="f-sub">Y dentro por</label>
-    <select id="f-sub" name="sub">{_options(sub_choices, sub)}</select>
-  </div>"""
-    return f"""
-<form class="bar" method="get" action="/" role="search" aria-label="Filtrar vacantes">
-  <div class="field">
-    <label for="f-q">Buscar en el título</label>
-    <input type="text" id="f-q" name="q" value="{e(params.get("q") or "")}"
-           placeholder="python, backend…">
+    <select id="f-sub" name="sub">{sub_options}</select>
   </div>
-  <div class="field">
-    <label for="f-min">Puntaje mínimo</label>
-    <input type="number" id="f-min" name="min" value="{e(params.get("min") or "")}"
-           step="1" min="0" style="width:7rem">
+  <div class="actions">
+    <div class="field check">
+      <input type="checkbox" id="f-new" name="new" value="1"{" checked" if params.get("new") else ""}>
+      <label for="f-new">Nuevas</label>
+    </div>
+    <button type="submit" class="ghost">Aplicar</button>
+    <a href="/">limpiar</a>
   </div>
-  <div class="field">
-    <label for="f-sort">Ordenar por</label>
-    <select id="f-sort" name="sort">{options}</select>
-  </div>{grouping}
-  <div class="field check">
-    <input type="checkbox" id="f-new" name="new" value="1"{" checked" if params.get("new") else ""}>
-    <label for="f-new">Solo nuevas</label>
-  </div>
-  <div class="field"><button type="submit">Filtrar</button></div>
-  <div class="field"><a href="/">Limpiar</a></div>
 </form>
-<p class="sub" role="status">Mostrando {showing} de {total} vacantes que pasaron el filtro.</p>
+<p class="showing" role="status">Mostrando {showing} de {total} vacantes que pasaron el filtro.</p>
 """
 
 
-def render_job_card(row: dict, top: float, seniority: dict) -> str:
+def render_job_card(row: dict, top: float, seniority: dict, rank: int = 0) -> str:
     level = seniority.get(str(row.get("seniority_id")), "sin nivel")
-    # Relative to the best result in this run: the maximum possible total moves
-    # with the weights in profile.toml, so an absolute bar would be a lie. The
-    # number beside it is the accessible value; the bar is decoration.
-    width = 0 if top <= 0 else max(0, min(100, round(row["score"] / top * 100)))
-    badge = ' <span class="tag new">NUEVA</span>' if row["is_new"] else ""
-    terms = (
-        f'<p class="terms">Coincide en: {e(", ".join(row["matched"]))}</p>'
-        if row.get("matched")
-        else ""
-    )
-    warn = (
-        f'<p class="terms"><span class="tag warn">OJO</span> '
-        f'También menciona: {e(", ".join(row["penalized"]))}</p>'
-        if row.get("penalized")
-        else ""
-    )
+    # Bars are relative to the best posting of this run — the maximum possible
+    # total moves with the weights in profile.toml, so an absolute meter would
+    # lie. The number beside them is the accessible value; bars are decoration.
+    lit = 0 if top <= 0 else max(0, min(4, round(row["score"] / top * 4)))
+    strong = " strong" if top > 0 and row["score"] / top >= 0.8 else ""
+    bars = "".join(f'<i class="{"on" if n < lit else ""}"></i>' for n in range(4))
+    badge = '<span class="badge">NUEVA</span>' if row["is_new"] else ""
+    chips = ""
+    if row.get("matched") or row.get("penalized"):
+        hit = "".join(f'<span class="chip hit">{e(t)}</span>' for t in row.get("matched", []))
+        warn = "".join(f'<span class="chip warn">{e(t)}</span>' for t in row.get("penalized", []))
+        chips = f'<p class="chips">{hit}{warn}</p>'
     return f"""<li class="job">
-  <h2><a href="/aviso/{e(urllib.parse.quote(row["id"]))}">{e(row["title"])}</a>{badge}</h2>
-  <p class="meta"><span class="score">{row["score"]:.1f} puntos</span><span>{e(level)}</span><span>{e(fmt_salary(row))}</span><span>{row["applications"]} postulaciones</span><span>{e(fmt_age(row["published_at"]))}</span></p>
-  <div class="meter" aria-hidden="true"><i style="width:{width}%"></i></div>
-  {terms}{warn}
+  <span class="rank" aria-hidden="true">{rank:02d}</span>
+  <div class="job-main">
+    <h2><a href="/aviso/{e(urllib.parse.quote(row["id"]))}">{e(row["title"])}</a>{badge}</h2>
+    {chips}
+  </div>
+  <div class="job-data">
+    <div class="signal-row"><span class="score{strong}">{row["score"]:.1f}</span>
+      <span class="bars" aria-hidden="true">{bars}</span></div>
+    <p class="meta"><b>{e(level)}</b> · {e(fmt_salary(row))} · {row["applications"]} post. · {e(fmt_age(row["published_at"]))}</p>
+  </div>
 </li>"""
 
 
-def render_cards(rows: list[dict], top: float, names: dict) -> str:
+def render_cards(rows: list[dict], top: float, names: dict, ranks: dict) -> str:
     return (
         '<ol class="jobs">'
-        + "".join(render_job_card(r, top, names) for r in rows)
+        + "".join(render_job_card(r, top, names, ranks.get(r["id"], 0)) for r in rows)
         + "</ol>"
     )
 
@@ -441,40 +687,44 @@ def render_cards(rows: list[dict], top: float, names: dict) -> str:
 def render_listing(rows: list[dict], params: dict, top: float, names: dict) -> str:
     """The ranked rows, optionally folded into collapsible groups.
 
-    Groups are plain `<details>`: a native disclosure widget every screen reader
-    already announces as expandable, with no state to track and no script. The
-    count lives in the summary text rather than in styling alone, so folding a
-    group never hides how much is inside it.
+    Groups are plain `<details>`: a native disclosure widget every screen
+    reader already announces as expandable, with no state to track and no
+    script. The count lives in the summary text rather than in styling alone,
+    so folding a group never hides how much it holds.
     """
     if not rows:
         return (
-            '<div class="empty"><p>Ninguna vacante coincide con ese filtro.</p>'
+            '<div class="empty"><h2>Ninguna vacante coincide con ese filtro</h2>'
             '<p><a href="/">Ver todas</a></p></div>'
         )
+
+    # Rank is the position in the overall ranking, not in the filtered view:
+    # a posting is "number 3" because of its score, however the list is sliced.
+    ranked = sorted(rows, key=lambda r: -r["score"])
+    ranks = {r["id"]: n for n, r in enumerate(ranked, 1)}
 
     axis, sub = group_axes(params)
     groups = group_rows(rows, axis, names)
     if groups is None:
-        return render_cards(rows, top, names)
+        return render_cards(rows, top, names, ranks)
 
     out, opened = [], 0
     for label, items in groups:
         # A group opens only if it fits inside what is left of the budget, not
         # merely because the budget was not spent yet — checking before adding
         # let a 25-posting group through on the strength of 13 already shown,
-        # which is the scroll this was meant to remove. The first group always
-        # opens regardless: a page that loads fully folded hides the best
-        # posting of the day behind a click. `opened` counts skipped groups too,
-        # so the fold line is one cut rather than an open group under a closed.
+        # which is the scroll folding was meant to remove. The first group
+        # always opens: a page that loads fully folded hides the best posting
+        # of the day behind a click.
         is_open = opened == 0 or opened + len(items) <= OPEN_UNTIL
         opened += len(items)
 
-        inner = render_cards(items, top, names)
+        inner = render_cards(items, top, names, ranks)
         if sub:
             inner = "".join(
                 f'<details class="sub" open><summary>{e(sub_label)} '
                 f'<span class="count">({len(sub_items)})</span></summary>'
-                f"{render_cards(sub_items, top, names)}</details>"
+                f"{render_cards(sub_items, top, names, ranks)}</details>"
                 for sub_label, sub_items in (group_rows(items, sub, names) or [])
             )
         out.append(
@@ -487,16 +737,18 @@ def render_listing(rows: list[dict], params: dict, top: float, names: dict) -> s
 
 def render_index(result: scan.Result | None, params: dict, running: bool) -> bytes:
     if result is None:
-        return page(
-            "Sin datos",
-            """<header><h1>jobscan</h1></header>
-<main id="main">
-  <div class="empty">
-    <p>Todavía no corriste ningún barrido sobre esta base.</p>
-    <form method="post" action="/scan"><button type="submit">Barrer ahora</button></form>
-  </div>
-</main>""",
-        )
+        body = """<header class="page-head"><h1>Radar</h1></header>
+<div class="empty">
+  <h2>Todavía no corriste ningún barrido</h2>
+  <p>Tres pasos y queda andando:</p>
+  <ol class="steps">
+    <li><span>Contá qué buscás en <a href="/perfil">tu perfil</a> — stack, vetos, sueldo objetivo.</span></li>
+    <li><span>Pegá <a href="/cv">tu CV</a> para afinar la capa semántica (opcional).</span></li>
+    <li><span>Barré Get on Board con el botón de la izquierda.</span></li>
+  </ol>
+  <form method="post" action="/scan"><button type="submit">Barrer ahora</button></form>
+</div>"""
+        return shell("Radar", body, active="/", running=running)
 
     rows = apply_filters(result.jobs, params)
     top = max((r["score"] for r in result.jobs), default=0.0)
@@ -504,7 +756,7 @@ def render_index(result: scan.Result | None, params: dict, running: bool) -> byt
 
     dropped = ""
     if result.dropped:
-        items = "\n".join(
+        items = "".join(
             f'<li><a href="{e(d["url"])}">{e(d["title"])}</a> — {e(d["reasons"][0])}</li>'
             for d in result.dropped[:120]
         )
@@ -513,98 +765,291 @@ def render_index(result: scan.Result | None, params: dict, running: bool) -> byt
             if len(result.dropped) > 120
             else ""
         )
-        dropped = f"""<details>
-  <summary>Descartadas antes de puntuar ({len(result.dropped)})</summary>
-  <p class="sub">Un filtro que no podés auditar es un filtro que esconde trabajo bueno.</p>
+        dropped = f"""<details class="drops">
+  <summary>Descartadas antes de puntuar ({len(result.dropped)}) — un filtro que no podés auditar esconde trabajo bueno</summary>
   <ul>{items}{rest}</ul>
 </details>"""
 
-    if running:
-        action = ('<p class="sub"><strong>Hay un barrido corriendo.</strong> '
-                  '<a href="/progreso">Ver el progreso</a>.</p>')
-    else:
-        action = ('<form method="post" action="/scan">'
-                  '<button type="submit">Barrer de nuevo</button></form>')
-
-    semantic = "" if result.semantic_on else " · capa semántica apagada"
-    body = f"""<header>
-  <h1>Vacantes</h1>
-  <p class="sub">Último barrido: {e(fmt_when(result.finished_at))} · {result.swept} avisos revisados · {len(result.jobs)} pasaron el filtro · {result.new_count} nuevas{e(semantic)}</p>
-  {action}
+    semantic = "" if result.semantic_on else " · <b>capa semántica apagada</b>"
+    body = f"""<header class="page-head">
+  <h1>Radar</h1>
+  <p class="statline">{result.swept} avisos revisados · <b>{len(result.jobs)}</b> pasaron el filtro ·
+     <b>{result.new_count}</b> nuevas desde la última corrida{semantic}</p>
 </header>
-<main id="main">
 {render_filters(params, len(result.jobs), len(rows))}
 {listing}
-{dropped}
-</main>"""
-    return page("Vacantes", body)
+{dropped}"""
+    return shell(
+        "Radar", body, active="/", last_sweep=fmt_when(result.finished_at), running=running
+    )
+
+
+# --------------------------------------------------------------------------
+# detail page
+# --------------------------------------------------------------------------
 
 
 def render_detail(result: scan.Result | None, job_id: str) -> tuple[int, bytes]:
     row = next((r for r in (result.jobs if result else []) if r["id"] == job_id), None)
     if row is None:
-        return 404, page(
+        return 404, shell(
             "No encontrada",
-            '<main id="main"><h1>Esa vacante no está en el último barrido</h1>'
-            '<p><a href="/">Volver a la lista</a></p></main>',
+            '<h1>Esa vacante no está en el último barrido</h1>'
+            '<p><a href="/">Volver al radar</a></p>',
+            active="/",
         )
 
     level = result.seniority_names.get(str(row.get("seniority_id")), "sin nivel")
-    parts = "\n".join(
+    peak = max((abs(v) for v in row["parts"].values()), default=0.0)
+    parts = "".join(
         f'<tr><th scope="row">{e(PART_LABELS.get(k, k))}</th>'
+        f'<td class="bar"><i style="width:{0 if peak <= 0 else max(2, round(abs(v) / peak * 100))}%"></i></td>'
         f'<td class="num">{v:.2f}</td></tr>'
         for k, v in row["parts"].items()
     )
     sim = "no calculada" if row["semantic"] is None else f"{row['semantic']:.3f}"
+    matched = "".join(f'<span class="chip hit">{e(t)}</span>' for t in row["matched"]) or (
+        '<span class="chip">ninguno</span>'
+    )
+    penalized = "".join(f'<span class="chip warn">{e(t)}</span>' for t in row["penalized"]) or (
+        '<span class="chip">ninguna</span>'
+    )
 
-    body = f"""<header>
-  <p class="sub"><a href="/">← Volver a la lista</a></p>
-  <h1>{e(row["title"])}</h1>
-  <p class="meta"><span class="score">{row["score"]:.1f} puntos</span><span>{e(level)}</span><span>{e(fmt_salary(row))}</span><span>{row["applications"]} postulaciones</span><span>{e(fmt_age(row["published_at"]))}</span><span>{e(row["category"] or "sin categoría")}</span></p>
-  <p><a href="{e(row["url"])}" rel="noopener">Abrir el aviso en Get on Board</a></p>
+    body = f"""<p class="crumb"><a href="/">← Radar</a></p>
+<header class="detail-head">
+  <h1>{e(row["title"])}{'<span class="badge">NUEVA</span>' if row["is_new"] else ""}</h1>
+  <div class="detail-stats">
+    <p class="stat">puntaje<b>{row["score"]:.2f}</b></p>
+    <p class="stat">seniority<b>{e(level)}</b></p>
+    <p class="stat">sueldo<b>{e(fmt_salary(row))}</b></p>
+    <p class="stat">postulaciones<b>{row["applications"]}</b></p>
+    <p class="stat">publicada<b>{e(fmt_age(row["published_at"]))}</b></p>
+    <p class="stat">categoría<b>{e(row["category"] or "—")}</b></p>
+  </div>
+  <p class="apply"><a class="btn" href="{e(row["url"])}" rel="noopener">Abrir el aviso en Get on Board ↗</a></p>
 </header>
-<main id="main">
+<section class="panel">
   <h2>De dónde sale el puntaje</h2>
-  <table>
-    <caption class="sub">Cada señal ya multiplicada por su peso en profile.toml.</caption>
-    <thead><tr><th scope="col">Señal</th><th scope="col" class="num">Aporte</th></tr></thead>
+  <table class="parts">
     <tbody>{parts}</tbody>
-    <tfoot><tr><th scope="row">Total</th><td class="num">{row["score"]:.2f}</td></tr></tfoot>
+    <tfoot><tr><th scope="row">Total</th><td></td><td class="num">{row["score"]:.2f}</td></tr></tfoot>
   </table>
+  <p class="hint">Cada señal ya multiplicada por su peso en tu perfil. Coseno contra tu perfil: {e(sim)}.</p>
+</section>
+<section class="panel">
   <h2>Coincidencias</h2>
-  <p>Términos de tu stack presentes: {e(", ".join(row["matched"]) or "ninguno")}.</p>
-  <p>Tecnologías ajenas mencionadas, que penalizan sin descartar:
-     {e(", ".join(row["penalized"]) or "ninguna")}.</p>
-  <p>Coseno contra tu perfil: {e(sim)}.</p>
-</main>"""
-    return 200, page(row["title"], body)
+  <p class="chips">{matched}</p>
+  <p class="hint">Tecnologías ajenas mencionadas — penalizan sin descartar:</p>
+  <p class="chips">{penalized}</p>
+</section>"""
+    return 200, shell(row["title"], body, active="/")
+
+
+# --------------------------------------------------------------------------
+# progress page
+# --------------------------------------------------------------------------
 
 
 def render_progress(state: "ScanState") -> bytes:
     lines = state.snapshot()
     log = "\n".join(lines) or "Arrancando…"
     if state.running:
-        note = '<p class="sub">Esta página se actualiza sola cada 3 segundos.</p>'
+        note = '<p class="statline">Esta página se actualiza sola cada 2 segundos.</p>'
         tail = ""
     elif not lines:
         # Reachable by typing the URL. Saying "listo" here would report a scan
         # that never happened as one that finished.
-        note = '<p class="sub">No hay ningún barrido corriendo.</p>'
-        tail = '<p><a href="/">Volver a la lista</a></p>'
+        note = '<p class="statline">No hay ningún barrido corriendo.</p>'
+        tail = '<p><a href="/">Volver al radar</a></p>'
         log = "Nada que mostrar todavía."
     elif state.error:
-        note = '<p class="sub"><strong>El barrido falló.</strong></p>'
-        tail = '<p><a href="/">Volver a la lista</a></p>'
+        note = '<p class="statline"><b>El barrido falló.</b></p>'
+        tail = '<p><a href="/">Volver al radar</a></p>'
         log = f"{log}\n\n{state.error}"
     else:
-        note = '<p class="sub">Listo.</p>'
-        tail = '<p><a href="/">Ver los resultados</a></p>'
-    body = f"""<header><h1>Barriendo Get on Board</h1>{note}</header>
-<main id="main">
-  <pre class="log" role="log" aria-label="Progreso del barrido">{e(log)}</pre>
-  {tail}
-</main>"""
-    return page("Barriendo", body, refresh=3 if state.running else 0)
+        note = '<p class="statline">Listo.</p>'
+        tail = '<p class="apply"><a class="btn" href="/">Ver los resultados</a></p>'
+    body = f"""<header class="page-head"><h1>Barriendo Get on Board</h1>{note}</header>
+<pre class="log" role="log" aria-label="Progreso del barrido">{e(log)}</pre>
+{tail}"""
+    return shell(
+        "Barriendo", body, active="/", running=state.running,
+        refresh=2 if state.running else 0,
+    )
+
+
+# --------------------------------------------------------------------------
+# profile page
+# --------------------------------------------------------------------------
+
+
+def _textarea(name: str, label: str, value: str, *, rows: int = 4, hint: str = "") -> str:
+    hint_html = f'<p class="hint">{hint}</p>' if hint else ""
+    return f"""<div class="field">
+  <label for="p-{name}">{e(label)}</label>
+  <textarea id="p-{name}" name="{name}" rows="{rows}">{e(value)}</textarea>
+  {hint_html}</div>"""
+
+
+def _number(name: str, label: str, value, *, step: str = "0.5") -> str:
+    return f"""<div class="field">
+  <label for="p-{name}">{e(label)}</label>
+  <input type="number" id="p-{name}" name="{name}" value="{e(value)}" step="{step}">
+</div>"""
+
+
+def render_profile_page(
+    profile: dict,
+    seniority_names: dict[str, str],
+    *,
+    errors: list[str] | None = None,
+    saved: bool = False,
+) -> bytes:
+    identity = profile.get("identity", {})
+    search = profile.get("search", {})
+    filters = profile.get("filters", {})
+    scoring = profile.get("scoring", {})
+    stack = profile.get("fit", {}).get("stack", {})
+    seniority = profile.get("seniority", {})
+
+    stack_text = "\n".join(f"{term} = {weight}" for term, weight in stack.items())
+    flag_checks = "".join(
+        f"""<div class="field check">
+  <input type="checkbox" id="fl-{e(flag)}" name="exclude_flags" value="{e(flag)}"{
+            " checked" if flag in set(filters.get("exclude_flags", [])) else ""}>
+  <label for="fl-{e(flag)}">{e(flag)} — {e(meaning)}</label></div>"""
+        for flag, meaning in profiles.KNOWN_FLAGS.items()
+    )
+
+    def seniority_checks(field_name: str, chosen: list) -> str:
+        chosen_set = set(chosen)
+        return "".join(
+            f"""<div class="field check">
+  <input type="checkbox" id="{field_name}-{sid}" name="{field_name}" value="{sid}"{
+                " checked" if int(sid) in chosen_set else ""}>
+  <label for="{field_name}-{sid}">{e(name)}</label></div>"""
+            for sid, name in seniority_names.items()
+        )
+
+    error_block = ""
+    if errors:
+        items = "".join(f"<li>{e(err)}</li>" for err in errors)
+        error_block = (
+            f'<div class="errors" role="alert"><b>No guardé nada</b> — primero esto:'
+            f"<ul>{items}</ul></div>"
+        )
+    saved_note = '<span class="saved" role="status">Guardado ✓</span>' if saved else ""
+
+    body = f"""<header class="page-head">
+  <h1>Perfil</h1>
+  <p class="statline">Todo lo que el ranking sabe de vos vive acá — se escribe en <b>profile.toml</b>,
+     así que la terminal y el navegador siempre leen lo mismo.</p>
+</header>
+{error_block}
+<form method="post" action="/perfil" class="form-grid">
+  <section class="panel">
+    <h2>Quién sos</h2>
+    {_textarea("summary", "Resumen para la capa semántica", identity.get("summary", "").strip(), rows=6,
+               hint="Contalo como se lo contarías a otro dev, en prosa — no como lista de keywords. Cada aviso se compara contra esto (y contra tu CV, si lo cargás).")}
+  </section>
+  <section class="panel">
+    <h2>Qué barrer</h2>
+    {_textarea("queries", "Términos de búsqueda, uno por línea", "\n".join(search.get("queries", [])), rows=8,
+               hint="La API no devuelve nada sin query, y ningún término solo cubre el tablero: cada línea es un ángulo y los resultados se unen.")}
+    <div class="cols-3">
+      <div class="field"><label for="p-category">Categoría de la búsqueda</label>
+        <input type="text" id="p-category" name="category" value="{e(search.get("category", "programming"))}"></div>
+      {_number("max_pages", "Páginas por búsqueda", search.get("max_pages_per_query", 3), step="1")}
+      <div class="field check" style="align-self:end">
+        <input type="checkbox" id="p-remote" name="remote_only" value="1"{" checked" if search.get("remote_only", True) else ""}>
+        <label for="p-remote">Solo remotas</label></div>
+    </div>
+  </section>
+  <section class="panel">
+    <h2>Tu stack — lo que suma puntos</h2>
+    {_textarea("stack", "Un término por línea: término = peso", stack_text, rows=12,
+               hint="El peso dice cuánto vale que aparezca. Se cuenta una vez por término, no por repetición. Sin peso, vale 2.")}
+  </section>
+  <section class="panel">
+    <h2>Descartes — lo que ni se lee</h2>
+    {_textarea("exclude_in_title", "Tecnologías vetadas en el título, una por línea",
+               "\n".join(filters.get("exclude_in_title", [])), rows=5,
+               hint="En el título es el eje del puesto: descarta. En el cuerpo solo penaliza — esa lista va abajo.")}
+    {_textarea("penalize_in_body", "Penalizar si aparecen en el cuerpo",
+               "\n".join(filters.get("penalize_in_body", [])), rows=3)}
+    {_textarea("allowed_categories", "Categorías del aviso aceptadas",
+               "\n".join(filters.get("allowed_categories", [])), rows=4,
+               hint="La categoría que el aviso trae, no la de la búsqueda — la API devuelve marketing aunque busques programming. Nombres exactos de /api/v0/categories.")}
+    <div class="field"><label for="p-langs">Idiomas excluidos (separados por coma)</label>
+      <input type="text" id="p-langs" name="exclude_langs" value="{e(", ".join(filters.get("exclude_langs", [])))}">
+      <p class="hint">Avisos que exigen postular en un idioma que no manejás.</p></div>
+    <div class="field"><span class="label">Banderas de calidad de Get on Board que descartan</span>
+      <div class="checks">{flag_checks}</div></div>
+  </section>
+  <section class="panel">
+    <h2>Pesos del puntaje</h2>
+    <div class="cols-3">
+      {_number("weight_stack", "Stack", scoring.get("weight_stack", 14.0))}
+      {_number("weight_semantic", "Semántica", scoring.get("weight_semantic", 12.0))}
+      {_number("weight_competition", "Competencia", scoring.get("weight_competition", 8.0))}
+      {_number("weight_freshness", "Frescura", scoring.get("weight_freshness", 5.0))}
+      {_number("weight_salary", "Sueldo", scoring.get("weight_salary", 3.0))}
+      {_number("weight_seniority", "Seniority", scoring.get("weight_seniority", 4.0))}
+    </div>
+    <div class="cols-3">
+      {_number("stack_half_point", "Saturación del stack", scoring.get("stack_half_point", 12.0))}
+      {_number("good_applications_count", "Postulaciones aceptables", scoring.get("good_applications_count", 100), step="10")}
+      {_number("stale_after_days", "Vieja a los (días)", scoring.get("stale_after_days", 45.0), step="5")}
+    </div>
+    {_number("target_salary_usd", "Sueldo objetivo (USD/mes)", scoring.get("target_salary_usd", 0), step="100")}
+    <p class="hint">Si un aviso que te gusta queda abajo de uno que no, el problema está acá — corré el radar y mirá el desglose de cada aviso.</p>
+  </section>
+  <section class="panel">
+    <h2>Seniority</h2>
+    <div class="field"><span class="label">Niveles que te calzan (puntaje completo)</span>
+      <div class="checks">{seniority_checks("seniority_fit", seniority.get("fit", []))}</div></div>
+    <div class="field"><span class="label">Niveles a los que aspirás (puntaje parcial)</span>
+      <div class="checks">{seniority_checks("seniority_reach", seniority.get("reach", []))}</div></div>
+  </section>
+  <div class="savebar">
+    <button type="submit">Guardar perfil</button>
+    {saved_note}
+  </div>
+</form>"""
+    return shell("Perfil", body, active="/perfil")
+
+
+# --------------------------------------------------------------------------
+# cv page
+# --------------------------------------------------------------------------
+
+
+def render_cv_page(cv_text: str, *, semantic_ready: bool, saved: bool = False) -> bytes:
+    if semantic_ready:
+        status = '<p class="statline">Ollama está corriendo — el CV entra en el próximo barrido.</p>'
+    else:
+        status = (
+            '<p class="statline"><b>Ollama no está corriendo</b> — el CV se guarda igual, '
+            "pero la capa semántica que lo usa está apagada hasta que lo levantes.</p>"
+        )
+    saved_note = '<span class="saved" role="status">Guardado ✓</span>' if saved else ""
+    body = f"""<header class="page-head">
+  <h1>CV</h1>
+  <p class="statline">Pegalo como texto plano. Se embebe junto a tu resumen y cada aviso se compara
+     contra los dos: el resumen dice qué querés, el CV dice qué hiciste.</p>
+</header>
+{status}
+<form method="post" action="/cv" class="form-grid">
+  <section class="panel">
+    {_textarea("cv", "Tu CV en texto plano", cv_text, rows=22,
+               hint="Queda en cv.txt al lado de profile.toml, fuera del repo. Dejarlo vacío lo borra.")}
+  </section>
+  <div class="savebar">
+    <button type="submit">Guardar CV</button>
+    {saved_note}
+  </div>
+</form>"""
+    return shell("CV", body, active="/cv")
 
 
 # --------------------------------------------------------------------------
@@ -657,6 +1102,18 @@ class ScanState:
             return list(self._lines)
 
 
+def _seniority_names(result: scan.Result | None) -> dict[str, str]:
+    """Names for the seniority checkboxes, cheapest source first."""
+    if result and result.seniority_names:
+        return result.seniority_names
+    try:
+        from . import api
+
+        return api.lookup("seniorities") or profiles.SENIORITY_FALLBACK
+    except Exception:
+        return profiles.SENIORITY_FALLBACK
+
+
 def make_handler(*, profile_path: Path, db: Path, no_semantic: bool):
     state = ScanState()
 
@@ -681,6 +1138,11 @@ def make_handler(*, profile_path: Path, db: Path, no_semantic: bool):
             self.send_header("Content-Length", "0")
             self.end_headers()
 
+        def _form(self) -> dict[str, list[str]]:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            return urllib.parse.parse_qs(raw, keep_blank_values=True)
+
         # -- routes ------------------------------------------------------
 
         def do_GET(self) -> None:
@@ -695,42 +1157,74 @@ def make_handler(*, profile_path: Path, db: Path, no_semantic: bool):
                     self._send(200, render_index(scan.last(db), params, state.running))
                 elif path == "/progreso":
                     self._send(200, render_progress(state))
+                elif path == "/perfil":
+                    profile = scan.load_profile(profile_path)
+                    self._send(200, render_profile_page(
+                        profile, _seniority_names(scan.last(db)), saved="ok" in params,
+                    ))
+                elif path == "/cv":
+                    ready = not no_semantic and not isinstance(
+                        embed.resolve(), embed.NullEmbedder
+                    )
+                    self._send(200, render_cv_page(
+                        profiles.load_cv(profile_path),
+                        semantic_ready=ready, saved="ok" in params,
+                    ))
                 elif path.startswith("/aviso/"):
                     status, body = render_detail(
                         scan.last(db), urllib.parse.unquote(path[len("/aviso/"):])
                     )
                     self._send(status, body)
                 else:
-                    self._send(404, page(
+                    self._send(404, shell(
                         "No existe",
-                        '<main id="main"><h1>Esa página no existe</h1>'
-                        '<p><a href="/">Volver a la lista</a></p></main>',
+                        '<h1>Esa página no existe</h1><p><a href="/">Volver al radar</a></p>',
                     ))
             except Exception:
-                self._send(500, page(
+                self._send(500, shell(
                     "Error",
-                    '<main id="main"><h1>Algo se rompió</h1>'
+                    "<h1>Algo se rompió</h1>"
                     f'<pre class="log">{e(traceback.format_exc(limit=4))}</pre>'
-                    '<p><a href="/">Volver a la lista</a></p></main>',
+                    '<p><a href="/">Volver al radar</a></p>',
                 ))
 
         def do_POST(self) -> None:
-            if urllib.parse.urlparse(self.path).path.rstrip("/") != "/scan":
-                self._redirect("/")
-                return
-            # The body carries nothing, but it has to be drained or the browser
-            # sees the connection close mid-request and reports a reset.
-            length = int(self.headers.get("Content-Length") or 0)
-            if length:
-                self.rfile.read(length)
-
-            profile = scan.load_profile(profile_path)
-            state.start(
-                lambda say: scan.run(
-                    profile=profile, db=db, no_semantic=no_semantic, on_progress=say
-                )
-            )
-            self._redirect("/progreso")
+            try:
+                path = urllib.parse.urlparse(self.path).path.rstrip("/")
+                if path == "/scan":
+                    self._form()  # drain the body or the browser reports a reset
+                    profile = scan.load_profile(profile_path)
+                    cv = profiles.load_cv(profile_path)
+                    state.start(
+                        lambda say: scan.run(
+                            profile=profile, db=db, cv=cv,
+                            no_semantic=no_semantic, on_progress=say,
+                        )
+                    )
+                    self._redirect("/progreso")
+                elif path == "/perfil":
+                    form = self._form()
+                    profile, errors = profiles.from_form(form)
+                    if errors:
+                        self._send(200, render_profile_page(
+                            profile, _seniority_names(scan.last(db)), errors=errors,
+                        ))
+                    else:
+                        profiles.save(profile, profile_path)
+                        self._redirect("/perfil?ok=1")
+                elif path == "/cv":
+                    form = self._form()
+                    profiles.save_cv(profile_path, (form.get("cv") or [""])[0])
+                    self._redirect("/cv?ok=1")
+                else:
+                    self._redirect("/")
+            except Exception:
+                self._send(500, shell(
+                    "Error",
+                    "<h1>Algo se rompió</h1>"
+                    f'<pre class="log">{e(traceback.format_exc(limit=4))}</pre>'
+                    '<p><a href="/">Volver al radar</a></p>',
+                ))
 
     return Handler
 
