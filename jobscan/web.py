@@ -31,6 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import embed, profiles, scan
+from .scoring import _term_pattern
 
 # Orderings the reader can ask for. Freshness and competition are offered
 # because they answer questions the total score blurs together: "what appeared
@@ -679,6 +680,47 @@ details.adv[open] > .panel { animation: reveal 220ms cubic-bezier(0.23, 1, 0.32,
   cursor: default;
 }
 .sug button.added::before { content: "✓"; }
+
+/* -- cv page ------------------------------------------------------------ */
+
+.cv-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; align-items: start; }
+.cv-side { display: grid; gap: 18px; }
+.cv-side .panel { margin: 0; animation: rise 300ms cubic-bezier(0.23, 1, 0.32, 1) backwards; }
+.cv-side .panel:nth-child(1) { animation-delay: 120ms; }
+.cv-side .panel:nth-child(2) { animation-delay: 200ms; }
+.cv-count { font-size: 12px; color: var(--ink-3); margin: -8px 0 0; text-align: right; }
+.cv-count.over { color: var(--amber); }
+
+.chain { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.chain-link {
+  display: flex; gap: 12px; align-items: flex-start; padding: 9px 2px;
+  position: relative;
+}
+.chain-link + .chain-link::before {
+  content: ""; position: absolute; left: 5px; top: -8px; height: 14px;
+  border-left: 2px solid var(--line);
+}
+.chain-link i {
+  width: 12px; height: 12px; border-radius: 50%; margin-top: 4px; flex: none;
+  background: var(--surface-2); border: 2px solid var(--line);
+  transition: background 200ms ease-out, border-color 200ms ease-out;
+}
+.chain-link.on i { background: var(--signal); border-color: var(--signal); }
+.chain-link.on i { box-shadow: 0 0 0 3px var(--signal-soft); }
+.chain-link b { display: block; font-size: 13.5px; font-weight: 600; }
+.chain-link span { font-size: 12px; color: var(--ink-3); line-height: 1.5; }
+.chain-link.off b { color: var(--ink-2); }
+
+#cv-cov h2 .count { float: right; font-size: 12px; color: var(--ink-3); text-transform: none; letter-spacing: 0; }
+#cv-cov .chip { transition: color 200ms ease-out, background 200ms ease-out, border-color 200ms ease-out; }
+#cv-cov .chip b { font-weight: 700; margin-right: 5px; }
+#cv-cov .chip.hit { color: var(--signal); background: var(--signal-soft); border-color: transparent; }
+#cv-cov .chip.miss { color: var(--ink-3); }
+#cv-cov .chip.key { border: 1px solid var(--line); }
+#cv-cov .chip.key.miss { border-color: var(--amber); color: var(--amber); }
+#cv-cov .chip.key.hit { border-color: transparent; }
+
+@media (max-width: 1100px) { .cv-grid { grid-template-columns: 1fr; } }
 
 /* -- progress & drops --------------------------------------------------- */
 
@@ -1451,34 +1493,142 @@ def render_profile_page(
 # --------------------------------------------------------------------------
 
 
+def cv_coverage(cv_text: str, stack: dict[str, float]) -> list[dict]:
+    """Which of the profile's stack terms the CV actually mentions.
+
+    Matched with the same word-boundary rule the ranking uses, so "what my CV
+    says" and "what the scorer sees" can never disagree. Key terms (weight 3+)
+    are flagged: a missing key term is the gap worth fixing first.
+    """
+    haystack = cv_text.lower()
+    return [
+        {
+            "term": term,
+            "key": weight >= 3,
+            "hit": bool(cv_text) and bool(_term_pattern(term).search(haystack)),
+        }
+        for term, weight in stack.items()
+    ]
+
+
+# Live feedback while the CV is being pasted: recount characters against the
+# embedder's window and re-check stack coverage on every keystroke. The regex
+# mirrors scoring's word-boundary rule; the server render is the authority on
+# load, this only keeps the panel honest while typing.
+CV_JS = r"""
+var area = document.getElementById('p-cv');
+var counter = document.getElementById('cv-count');
+var LIMIT = 4000;
+
+function esc(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+function refresh() {
+  var text = area.value;
+  var used = Math.min(text.length, LIMIT);
+  counter.textContent = text.length === 0
+    ? 'vacío'
+    : used.toLocaleString('es') + ' de ' + text.length.toLocaleString('es') + ' caracteres se embeben';
+  counter.classList.toggle('over', text.length > LIMIT);
+
+  var low = text.toLowerCase();
+  document.querySelectorAll('#cv-cov .chip[data-term]').forEach(function (chip) {
+    var re = new RegExp('\\b' + esc(chip.getAttribute('data-term').toLowerCase()) + '\\w*');
+    var hit = text.length > 0 && re.test(low);
+    chip.classList.toggle('hit', hit);
+    chip.classList.toggle('miss', !hit);
+    var mark = chip.querySelector('b');
+    if (mark) mark.textContent = hit ? '✓' : '·';
+  });
+  var hits = document.querySelectorAll('#cv-cov .chip.hit').length;
+  var total = document.querySelectorAll('#cv-cov .chip[data-term]').length;
+  var tally = document.getElementById('cv-tally');
+  if (tally) tally.textContent = hits + ' de ' + total;
+}
+if (area && counter) {
+  area.addEventListener('input', refresh);
+  refresh();
+}
+"""
+
+
 def render_cv_page(
-    cv_text: str, *, semantic_ready: bool, saved: bool = False,
+    cv_text: str,
+    *,
+    semantic_ready: bool,
+    saved: bool = False,
     last_sweep: str | None = None,
+    stack: dict[str, float] | None = None,
+    summary_ok: bool = True,
 ) -> bytes:
-    if semantic_ready:
-        status = '<p class="statline">Ollama está corriendo — el CV entra en el próximo barrido.</p>'
-    else:
-        status = (
-            '<p class="statline"><b>Ollama no está corriendo</b> — el CV se guarda igual, '
-            "pero la capa semántica que lo usa está apagada hasta que lo levantes.</p>"
-        )
+    stack = stack or {}
     saved_note = '<span class="saved" role="status">Guardado ✓</span>' if saved else ""
+
+    # The semantic chain as something to look at: each link lights up when it
+    # is真 actually in place, so "why is my CV doing nothing" answers itself.
+    def link(on: bool, name: str, detail_on: str, detail_off: str) -> str:
+        cls = "on" if on else "off"
+        return (
+            f'<li class="chain-link {cls}"><i></i><div><b>{e(name)}</b>'
+            f"<span>{e(detail_on if on else detail_off)}</span></div></li>"
+        )
+
+    chain = (
+        '<ol class="chain">'
+        + link(summary_ok, "Resumen", "escrito en tu perfil", "falta en tu perfil")
+        + link(bool(cv_text), "CV", "cargado acá", "todavía vacío")
+        + link(semantic_ready, "Ollama", "corriendo — embebe los dos",
+               "apagado — el CV espera, no se pierde")
+        + link(semantic_ready and summary_ok, "Radar",
+               "el próximo barrido compara cada aviso contra vos",
+               "hasta entonces rankea solo por keywords")
+        + "</ol>"
+    )
+
+    coverage = cv_coverage(cv_text, stack)
+    hits = sum(1 for c in coverage if c["hit"])
+    cov_chips = "".join(
+        f'<span class="chip {"hit" if c["hit"] else "miss"}{" key" if c["key"] else ""}" '
+        f'data-term="{e(c["term"])}"><b>{"✓" if c["hit"] else "·"}</b>{e(c["term"])}</span>'
+        for c in coverage
+    ) or '<span class="none">Definí tu stack en el perfil y acá aparece la cobertura.</span>'
+
+    chars = len(cv_text)
+    count_text = (
+        "vacío" if chars == 0
+        else f"{min(chars, 4000):,} de {chars:,} caracteres se embeben".replace(",", ".")
+    )
+
     body = f"""<header class="page-head">
   <h1>CV</h1>
-  <p class="statline">Pegalo como texto plano. Se embebe junto a tu resumen y cada aviso se compara
-     contra los dos: el resumen dice qué querés, el CV dice qué hiciste.</p>
+  <p class="statline">Pegalo como texto plano. El resumen dice qué querés; el CV dice qué hiciste —
+     cada aviso se compara contra los dos.</p>
 </header>
-{status}
-<form method="post" action="/cv" class="form-grid">
-  <section class="panel">
-    {_textarea("cv", "Tu CV en texto plano", cv_text, rows=22,
-               hint="Queda en cv.txt al lado de profile.toml, fuera del repo. Dejarlo vacío lo borra.")}
-  </section>
-  <div class="savebar">
-    <button type="submit">Guardar CV</button>
-    {saved_note}
-  </div>
-</form>"""
+<div class="cv-grid">
+  <form method="post" action="/cv" class="form-grid cv-main">
+    <section class="panel">
+      {_textarea("cv", "Tu CV en texto plano", cv_text, rows=24,
+                 hint="Queda en cv.txt al lado de profile.toml, fuera del repo. Dejarlo vacío lo borra.")}
+      <p class="cv-count mono" id="cv-count" aria-live="off">{e(count_text)}</p>
+    </section>
+    <div class="savebar">
+      <button type="submit">Guardar CV</button>
+      {saved_note}
+    </div>
+  </form>
+  <aside class="cv-side">
+    <section class="panel">
+      <h2>La cadena semántica</h2>
+      {chain}
+    </section>
+    <section class="panel" id="cv-cov">
+      <h2>Tu stack en el CV <span class="count" id="cv-tally">{hits} de {len(coverage)}</span></h2>
+      <p class="chips">{cov_chips}</p>
+      <p class="hint">Los términos con borde son tus claves ★. Uno que tu CV no nombra es señal
+         que la semántica no puede ver — nombralo donde sea verdad.</p>
+    </section>
+  </aside>
+</div>
+<script>{CV_JS}</script>"""
     return shell("CV", body, active="/cv", last_sweep=last_sweep)
 
 
@@ -1600,10 +1750,13 @@ def make_handler(*, profile_path: Path, db: Path, no_semantic: bool):
                         embed.resolve(), embed.NullEmbedder
                     )
                     last = scan.last(db)
+                    profile = scan.load_profile(profile_path)
                     self._send(200, render_cv_page(
                         profiles.load_cv(profile_path),
                         semantic_ready=ready, saved="ok" in params,
                         last_sweep=fmt_when(last.finished_at) if last else None,
+                        stack=profile.get("fit", {}).get("stack", {}),
+                        summary_ok=bool(profile.get("identity", {}).get("summary", "").strip()),
                     ))
                 elif path.startswith("/aviso/"):
                     status, body = render_detail(

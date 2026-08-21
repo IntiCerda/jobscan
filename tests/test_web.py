@@ -543,7 +543,37 @@ def test_the_settings_pages_answer_and_keep_their_labels():
 
     cv_page = web.render_cv_page("mi cv", semantic_ready=False).decode()
     check("the cv comes back into the textarea", ">mi cv</textarea>" in cv_page)
-    check("a missing ollama is stated, not hidden", "no está corriendo" in cv_page)
+    check("a missing ollama is stated, not hidden", "apagado" in cv_page)
+
+
+def test_the_cv_page_reports_stack_coverage_with_the_scorers_eyes():
+    # "My CV mentions python" and "the scorer sees python" must be the same
+    # judgment — coverage uses the ranking's own word-boundary matcher, so the
+    # rag-inside-fragmented false positive can never disagree between pages.
+    stack = {"python": 3.0, "rag": 4.0, "docker": 1.5}
+    page = web.render_cv_page(
+        "Construí APIs en Python sobre fragmented pipelines",
+        semantic_ready=True, stack=stack,
+    ).decode()
+    check("a mentioned term shows as covered", 'data-term="python"><b>✓</b>' in page)
+    check("rag inside fragmented is NOT coverage", 'data-term="rag"><b>·</b>' in page)
+    check("a key term the cv lacks is flagged", 'class="chip miss key"' in page
+          or 'chip miss key' in page.replace("  ", " "))
+    check("the tally counts hits", "1 de 3" in page)
+
+    cov = web.cv_coverage("", stack)
+    check("an empty cv covers nothing", all(not c["hit"] for c in cov))
+
+
+def test_the_cv_page_shows_the_semantic_chain_honestly():
+    page_on = web.render_cv_page("cv", semantic_ready=True, stack={}, summary_ok=True).decode()
+    page_off = web.render_cv_page("", semantic_ready=False, stack={}, summary_ok=False).decode()
+    check("all links light up when everything is in place",
+          page_on.count("chain-link on") == 4)
+    check("nothing lights up when nothing is in place",
+          page_off.count("chain-link on") == 0 and page_off.count("chain-link off") == 4)
+    check("the embed window is stated in characters", "se embeben" in page_on)
+    check("the live script survives as literal escapes", "\\\\b" in web.CV_JS)
 
 
 def test_every_page_carries_the_navigation():
