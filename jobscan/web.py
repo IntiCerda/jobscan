@@ -306,6 +306,7 @@ p { text-wrap: pretty; }
 .nav-item {
   display: block; padding: 9px 12px; border-radius: 7px;
   color: var(--ink-2); text-decoration: none; font-weight: 500; font-size: 15px;
+  transition: background 120ms ease-out, color 120ms ease-out;
 }
 .nav-item:hover { color: var(--ink); background: var(--line-2); }
 .nav-item[aria-current="page"] { color: var(--ink); background: var(--surface-2); font-weight: 600; }
@@ -335,6 +336,7 @@ button, .btn {
   border: 1px solid var(--signal); background: var(--signal); color: var(--signal-ink);
   transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
 }
+button:hover, .btn:hover { filter: brightness(1.07); }
 button:active { transform: scale(0.97); }
 button.ghost { background: transparent; color: var(--ink-2); border-color: var(--line); }
 button.ghost:hover { color: var(--ink); border-color: var(--ink-3); }
@@ -368,7 +370,7 @@ input::placeholder, textarea::placeholder { color: var(--ink-3); }
 .statline b { color: var(--ink); font-weight: 600; }
 
 .toolbar {
-  display: grid; grid-template-columns: minmax(160px, 1fr) 104px 168px 168px 168px auto;
+  display: grid; grid-template-columns: minmax(220px, 1.6fr) 96px 160px 176px 176px auto;
   gap: 12px; align-items: end;
   padding: 16px; margin: 0 0 10px;
   background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
@@ -390,6 +392,13 @@ details.grp > summary::before {
   align-self: center;
 }
 details.grp[open] > summary::before { transform: rotate(90deg); }
+details.grp[open] > ol.jobs, details.grp[open] > details.sub,
+details.sub[open] > ol.jobs {
+  animation: reveal 220ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+@keyframes reveal { from { opacity: 0; transform: translateY(-4px); } }
+details.grp > summary { border-radius: 7px; transition: color 120ms ease-out; }
+details.grp > summary:hover .grp-name { color: var(--signal); }
 .grp-name {
   font-family: ui-monospace, Consolas, monospace;
   font-size: 13px; font-weight: 650; letter-spacing: 0.07em;
@@ -402,7 +411,11 @@ details.sub > summary {
   list-style: none; cursor: pointer;
   font-family: ui-monospace, Consolas, monospace;
   font-size: 12px; font-weight: 600; color: var(--ink-2); padding: 8px 4px 6px 2px;
+  display: flex; align-items: center; gap: 10px;
+  transition: color 120ms ease-out;
 }
+details.sub > summary::after { content: ""; flex: 1; border-top: 1px solid var(--line-2); }
+details.sub > summary:hover { color: var(--ink); }
 details.sub > summary::-webkit-details-marker { display: none; }
 
 /* the ledger — rows live on a visible surface so the structure reads at a
@@ -418,7 +431,15 @@ li.job {
   border-bottom: 1px solid var(--line-2);
 }
 li.job:last-child { border-bottom: none; }
-li.job:hover { background: var(--line-2); }
+li.job:hover { background: var(--line-2); box-shadow: inset 2px 0 0 var(--signal); }
+li.job { animation: rise 260ms cubic-bezier(0.23, 1, 0.32, 1) backwards; }
+li.job:nth-child(1) { animation-delay: 30ms; }
+li.job:nth-child(2) { animation-delay: 60ms; }
+li.job:nth-child(3) { animation-delay: 90ms; }
+li.job:nth-child(4) { animation-delay: 120ms; }
+li.job:nth-child(5) { animation-delay: 150ms; }
+li.job:nth-child(6) { animation-delay: 180ms; }
+@keyframes rise { from { opacity: 0; transform: translateY(5px); } }
 li.job:first-child { border-radius: 10px 10px 0 0; }
 li.job:last-child { border-radius: 0 0 10px 10px; }
 .rank { font-size: 13px; color: var(--ink-3); padding-top: 5px; text-align: right; }
@@ -436,8 +457,9 @@ li.job:last-child { border-radius: 0 0 10px 10px; }
   font-size: 12px; color: var(--ink-2); background: var(--surface-2);
   border: 1px solid var(--line-2); border-radius: 5px; padding: 2px 8px;
 }
-.chip.hit { color: var(--signal); border-color: var(--signal-soft); background: var(--signal-soft); }
+.chip.hit { color: var(--ink-2); }
 .chip.warn { color: var(--amber); background: var(--amber-bg); border-color: transparent; }
+.none { font-size: 13px; color: var(--ink-3); }
 .job-data { text-align: right; }
 .signal-row { display: flex; align-items: center; gap: 9px; justify-content: flex-end; }
 .score { font-size: 23px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
@@ -473,6 +495,7 @@ li.job .meta b { color: var(--ink-2); font-weight: 500; }
 .detail-stats .stat { font-size: 12.5px; color: var(--ink-3); }
 .detail-stats .stat b { display: block; font-size: 17px; font-weight: 600; color: var(--ink); margin-top: 3px; }
 .apply { margin: 20px 0 36px; }
+.detail-head + section.panel, .detail-head ~ section.panel { max-width: 800px; }
 .btn { text-decoration: none; display: inline-block; }
 .panel {
   background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
@@ -487,12 +510,16 @@ table.parts td, table.parts th {
 }
 table.parts td.num { text-align: right; font-variant-numeric: tabular-nums; width: 72px; }
 table.parts .bar { width: 42%; }
-table.parts .bar i { display: block; height: 5px; border-radius: 2.5px; background: var(--signal); }
+table.parts .bar i {
+  display: block; height: 5px; border-radius: 2.5px; background: var(--signal);
+  animation: growx 420ms cubic-bezier(0.23, 1, 0.32, 1) backwards; transform-origin: left;
+}
+@keyframes growx { from { transform: scaleX(0); } }
 table.parts tfoot th, table.parts tfoot td { font-weight: 650; border-bottom: none; padding-top: 12px; }
 
 /* -- forms (perfil, cv) ------------------------------------------------- */
 
-.form-grid { display: grid; gap: 18px; }
+.form-grid { display: grid; gap: 18px; max-width: 860px; }
 .form-grid .panel { margin: 0; display: grid; gap: 16px; }
 .cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .cols-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
@@ -520,6 +547,9 @@ details.drops a { color: var(--ink-2); }
 
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
+}
+@media (max-width: 1280px) {
+  .toolbar { grid-template-columns: 1fr 1fr 1fr; }
 }
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }
@@ -549,6 +579,7 @@ def shell(
     *,
     active: str = "",
     last_sweep: str | None = None,
+    foot_stats: str = "",
     running: bool = False,
     refresh: int = 0,
 ) -> bytes:
@@ -565,8 +596,9 @@ def shell(
             '<form method="post" action="/scan">'
             '<button type="submit">Barrer ahora</button></form>'
         )
+    stats_line = f"<br>{e(foot_stats)}" if foot_stats else ""
     sweep_line = (
-        f'<p class="stat">último barrido<br><strong>{e(last_sweep)}</strong></p>'
+        f'<p class="stat">último barrido<br><strong>{e(last_sweep)}</strong>{stats_line}</p>'
         if last_sweep
         else '<p class="stat">sin barridos todavía</p>'
     )
@@ -627,7 +659,7 @@ def render_filters(params: dict, total: int, showing: int) -> str:
   <div class="field">
     <label for="f-q">Buscar</label>
     <input type="text" id="f-q" name="q" value="{e(params.get("q") or "")}"
-           placeholder="título o término del stack">
+           placeholder="python, backend…">
   </div>
   <div class="field">
     <label for="f-min">Mínimo</label>
@@ -664,7 +696,10 @@ def render_job_card(row: dict, top: float, seniority: dict, rank: int = 0) -> st
     # total moves with the weights in profile.toml, so an absolute meter would
     # lie. The number beside them is the accessible value; bars are decoration.
     lit = 0 if top <= 0 else max(0, min(4, round(row["score"] / top * 4)))
-    strong = " strong" if top > 0 and row["score"] / top >= 0.8 else ""
+    # Green means "señal fuerte", the same 25-point line the band is named
+    # after. A relative threshold painted half the page green, and an accent
+    # that is everywhere stops meaning anything.
+    strong = " strong" if row["score"] >= 25 else ""
     bars = "".join(f'<i class="{"on" if n < lit else ""}"></i>' for n in range(4))
     badge = '<span class="badge">NUEVA</span>' if row["is_new"] else ""
     chips = ""
@@ -784,13 +819,17 @@ def render_index(result: scan.Result | None, params: dict, running: bool) -> byt
     body = f"""<header class="page-head">
   <h1>Radar</h1>
   <p class="statline">{result.swept} avisos revisados · <b>{len(result.jobs)}</b> pasaron el filtro ·
-     <b>{result.new_count}</b> nuevas desde la última corrida{semantic}</p>
+     <b>{result.new_count}</b> {"nueva" if result.new_count == 1 else "nuevas"} desde la última corrida{semantic}</p>
 </header>
 {render_filters(params, len(result.jobs), len(rows))}
 {listing}
 {dropped}"""
+    nuevas = f"{result.new_count} " + ("nueva" if result.new_count == 1 else "nuevas")
     return shell(
-        "Radar", body, active="/", last_sweep=fmt_when(result.finished_at), running=running
+        "Radar", body, active="/",
+        last_sweep=fmt_when(result.finished_at),
+        foot_stats=f"{len(result.jobs)} en radar · {nuevas}",
+        running=running,
     )
 
 
@@ -819,10 +858,10 @@ def render_detail(result: scan.Result | None, job_id: str) -> tuple[int, bytes]:
     )
     sim = "no calculada" if row["semantic"] is None else f"{row['semantic']:.3f}"
     matched = "".join(f'<span class="chip hit">{e(t)}</span>' for t in row["matched"]) or (
-        '<span class="chip">ninguno</span>'
+        '<span class="none">ninguno</span>'
     )
     penalized = "".join(f'<span class="chip warn">{e(t)}</span>' for t in row["penalized"]) or (
-        '<span class="chip">ninguna</span>'
+        '<span class="none">ninguna</span>'
     )
 
     body = f"""<p class="crumb"><a href="/">← Radar</a></p>
@@ -852,7 +891,9 @@ def render_detail(result: scan.Result | None, job_id: str) -> tuple[int, bytes]:
   <p class="hint">Tecnologías ajenas mencionadas — penalizan sin descartar:</p>
   <p class="chips">{penalized}</p>
 </section>"""
-    return 200, shell(row["title"], body, active="/")
+    return 200, shell(
+        row["title"], body, active="/", last_sweep=fmt_when(result.finished_at)
+    )
 
 
 # --------------------------------------------------------------------------
@@ -914,6 +955,7 @@ def render_profile_page(
     *,
     errors: list[str] | None = None,
     saved: bool = False,
+    last_sweep: str | None = None,
 ) -> bytes:
     identity = profile.get("identity", {})
     search = profile.get("search", {})
@@ -1026,7 +1068,7 @@ def render_profile_page(
     {saved_note}
   </div>
 </form>"""
-    return shell("Perfil", body, active="/perfil")
+    return shell("Perfil", body, active="/perfil", last_sweep=last_sweep)
 
 
 # --------------------------------------------------------------------------
@@ -1034,7 +1076,10 @@ def render_profile_page(
 # --------------------------------------------------------------------------
 
 
-def render_cv_page(cv_text: str, *, semantic_ready: bool, saved: bool = False) -> bytes:
+def render_cv_page(
+    cv_text: str, *, semantic_ready: bool, saved: bool = False,
+    last_sweep: str | None = None,
+) -> bytes:
     if semantic_ready:
         status = '<p class="statline">Ollama está corriendo — el CV entra en el próximo barrido.</p>'
     else:
@@ -1059,7 +1104,7 @@ def render_cv_page(cv_text: str, *, semantic_ready: bool, saved: bool = False) -
     {saved_note}
   </div>
 </form>"""
-    return shell("CV", body, active="/cv")
+    return shell("CV", body, active="/cv", last_sweep=last_sweep)
 
 
 # --------------------------------------------------------------------------
@@ -1169,16 +1214,20 @@ def make_handler(*, profile_path: Path, db: Path, no_semantic: bool):
                     self._send(200, render_progress(state))
                 elif path == "/perfil":
                     profile = scan.load_profile(profile_path)
+                    last = scan.last(db)
                     self._send(200, render_profile_page(
-                        profile, _seniority_names(scan.last(db)), saved="ok" in params,
+                        profile, _seniority_names(last), saved="ok" in params,
+                        last_sweep=fmt_when(last.finished_at) if last else None,
                     ))
                 elif path == "/cv":
                     ready = not no_semantic and not isinstance(
                         embed.resolve(), embed.NullEmbedder
                     )
+                    last = scan.last(db)
                     self._send(200, render_cv_page(
                         profiles.load_cv(profile_path),
                         semantic_ready=ready, saved="ok" in params,
+                        last_sweep=fmt_when(last.finished_at) if last else None,
                     ))
                 elif path.startswith("/aviso/"):
                     status, body = render_detail(
