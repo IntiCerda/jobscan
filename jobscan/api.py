@@ -184,7 +184,15 @@ def search(
     max_pages: int = 3,
 ) -> list[Job]:
     """One query angle, paginated. Stops early when the API reports fewer pages
-    than requested so a narrow term costs a single round trip."""
+    than requested so a narrow term costs a single round trip.
+
+    `category` is sent for good manners and does nothing: the same four queries
+    return an identical 94 postings with it set to `programming`,
+    `machine-learning-ai`, `data-science-analytics`, `sysadmin-devops-qa`, or
+    omitted entirely. Do not reach for it to narrow a sweep, and do not assume
+    a category not passed here is going unsearched — filtering happens on the
+    `category_name` each posting carries, in `scoring.knockouts`.
+    """
     params: dict[str, str | int] = {"query": query, "per_page": per_page}
     if category:
         params["category"] = category
