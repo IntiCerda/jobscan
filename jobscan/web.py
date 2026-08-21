@@ -370,13 +370,22 @@ input::placeholder, textarea::placeholder { color: var(--ink-3); }
 .statline b { color: var(--ink); font-weight: 600; }
 
 .toolbar {
-  display: grid; grid-template-columns: minmax(220px, 1.6fr) 96px 160px 176px 176px auto;
+  display: grid; grid-template-columns: minmax(220px, 1.6fr) 96px 160px 176px 176px;
   gap: 12px; align-items: end;
   padding: 16px; margin: 0 0 10px;
   background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
 }
-.toolbar .actions { display: flex; gap: 10px; align-items: center; padding-bottom: 1px; }
-.toolbar .actions a { font-size: 13.5px; color: var(--ink-2); }
+.toolbar-foot {
+  grid-column: 1 / -1; display: flex; align-items: center; gap: 10px;
+  padding-top: 14px; margin-top: 4px; border-top: 1px solid var(--line-2);
+}
+.toolbar-foot .check { margin-right: auto; }
+.btn.ghost {
+  background: transparent; color: var(--ink-2); border: 1px solid var(--line);
+  padding: 9px 15px; border-radius: 7px; font-size: 14.5px; font-weight: 500;
+  text-decoration: none; transition: color 120ms ease-out, border-color 120ms ease-out;
+}
+.btn.ghost:hover { color: var(--ink); border-color: var(--ink-3); filter: none; }
 .showing { font-size: 13px; color: var(--ink-3); margin: 12px 2px 24px; }
 
 details.grp { margin: 0 0 22px; }
@@ -677,13 +686,13 @@ def render_filters(params: dict, total: int, showing: int) -> str:
     <label for="f-sub">Y dentro por</label>
     <select id="f-sub" name="sub">{sub_options}</select>
   </div>
-  <div class="actions">
+  <div class="toolbar-foot">
     <div class="field check">
       <input type="checkbox" id="f-new" name="new" value="1"{" checked" if params.get("new") else ""}>
-      <label for="f-new">Nuevas</label>
+      <label for="f-new">Solo nuevas</label>
     </div>
-    <button type="submit" class="ghost">Aplicar</button>
-    <a href="/">limpiar</a>
+    <a class="btn ghost" href="/">Limpiar</a>
+    <button type="submit">Aplicar filtros</button>
   </div>
 </form>
 <p class="showing" role="status">Mostrando {showing} de {total} vacantes que pasaron el filtro.</p>
