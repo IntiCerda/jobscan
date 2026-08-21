@@ -144,7 +144,16 @@ def main(argv: list[str] | None = None) -> int:
         args.output.write_text(report, encoding="utf-8")
         print(f"\nEscrito en {args.output}", file=sys.stderr)
     else:
-        print(report)
+        # A Windows console defaults to cp1252, and the report is full of
+        # accents, em dashes and the odd arrow: printing it raised
+        # UnicodeEncodeError and threw away a whole sweep. Replacing the
+        # handful of unmappable characters beats crashing on the plainest
+        # invocation of the tool. `-o` writes UTF-8 and is unaffected.
+        try:
+            print(report)
+        except UnicodeEncodeError:
+            enc = sys.stdout.encoding or "utf-8"
+            sys.stdout.buffer.write(report.encode(enc, "replace") + b"\n")
     return 0
 
 

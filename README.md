@@ -72,7 +72,10 @@ practice `node` contributes forty postings that `python` never surfaces.
 **Knockouts.** Absolute, and they run before scoring:
 
 - `lang == "en"` — the posting requires applying in a language you listed as
-  out of reach. One field, no reading required.
+  out of reach. One field, no reading required. When the API leaves that field
+  blank — it reports `lang_not_specified` often — the body is sniffed by
+  function-word ratio instead, which is what catches an all-English posting
+  published without a language tag.
 - Get on Board's own `rejected_reasons` — the site flags postings as
   `talent_pool` (collecting CVs, not filling a role), `not_really_remote`,
   `unclear_functions`, `seniority_mismatch`. Free quality signal that most

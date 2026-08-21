@@ -36,6 +36,42 @@ def _term_pattern(term: str) -> re.Pattern:
     return re.compile(r"\b" + re.escape(term.lower()) + r"\w*")
 
 
+# Function words, not vocabulary. A Spanish posting is full of English
+# technology names and an English one carries none of these; the words around
+# the stack are what separate the two.
+_ES_WORDS = frozenset(
+    "de la que el en y los las del un una para con por su al se lo como más "
+    "experiencia conocimientos buscamos trabajo puesto sobre nuestro".split()
+)
+_EN_WORDS = frozenset(
+    "the of and to in for with you your we our are is will have as on that "
+    "be this from at their they".split()
+)
+
+
+def detect_lang(text: str) -> str | None:
+    """'es', 'en', or None when there is not enough prose to decide.
+
+    Get on Board reports `lang_not_specified` on a good share of postings, and
+    some of those are written end to end in English — a Zagged listing whose
+    entire body was English sailed past the `lang == "en"` knockout and landed
+    in the ranking, where it cost a real read to discard. Counting function
+    words recovers the field the API left blank.
+
+    Returning None rather than guessing matters: a stub posting of three lines
+    should fall through to whatever the API said, not be assigned a language on
+    the strength of four words.
+    """
+    words = re.findall(r"[a-záéíóúñ]+", text.lower())
+    if len(words) < 40:
+        return None
+    es = sum(w in _ES_WORDS for w in words)
+    en = sum(w in _EN_WORDS for w in words)
+    if es == en:
+        return None
+    return "es" if es > en else "en"
+
+
 @dataclass
 class Score:
     total: float
@@ -50,8 +86,15 @@ def knockouts(job: Job, profile: dict) -> list[str]:
     f = profile.get("filters", {})
     reasons: list[str] = []
 
-    if job.lang in set(f.get("exclude_langs", [])):
-        reasons.append(f"escrito en '{job.lang}' — exige postular en ese idioma")
+    excluded_langs = set(f.get("exclude_langs", []))
+    lang, inferred = job.lang, False
+    if lang in ("", "lang_not_specified"):
+        sniffed = detect_lang(job.text)
+        if sniffed:
+            lang, inferred = sniffed, True
+    if lang in excluded_langs:
+        how = " (deducido del texto)" if inferred else ""
+        reasons.append(f"escrito en '{lang}'{how} — exige postular en ese idioma")
 
     excluded_flags = set(f.get("exclude_flags", []))
     hit_flags = sorted(excluded_flags.intersection(job.flags))

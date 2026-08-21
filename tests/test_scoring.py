@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from jobscan.api import Job, _strip_html, parse_job  # noqa: E402
 from jobscan.embed import cosine  # noqa: E402
-from jobscan.scoring import knockouts, score  # noqa: E402
+from jobscan.scoring import detect_lang, knockouts, score  # noqa: E402
 
 PROFILE = {
     "filters": {
@@ -64,6 +64,15 @@ def make_job(**over) -> Job:
     )
     base.update(over)
     return Job(**base)
+
+
+EN_BODY = (
+    "We are seeking a mid level engineer who can confidently build and iterate on both app and web components. You should be comfortable working across the full delivery cycle from scoping and implementation to testing and deployment support. We value engineers who take ownership of their work, bringing issues to light early and following through to completion with the rest of the team."
+)
+
+ES_BODY = (
+    "Buscamos un desarrollador backend con experiencia en Python y FastAPI para sumarse al equipo de la plataforma. El puesto es remoto desde cualquier lugar y el trabajo se organiza por sprints. Entre las responsabilidades del cargo estan el diseno de servicios, la escritura de pruebas y la revision de codigo con el resto de los ingenieros de nuestro equipo."
+)
 
 
 def check(name, cond):
@@ -264,6 +273,37 @@ def test_html_stripping_and_parsing():
 
 def test_age_of_undated_posting_does_not_bury_it():
     check("an unknown date reads as brand new", make_job(published_at=None).age_days == 0.0)
+
+
+def test_english_body_is_caught_when_the_api_leaves_lang_blank():
+    """A Zagged posting reported `lang_not_specified` with an all-English body
+    and sailed straight past the language knockout into the ranking. The field
+    the API left blank is recoverable from the prose."""
+    job = make_job(lang="lang_not_specified", text=EN_BODY)
+    reasons = knockouts(job, PROFILE)
+    check("the English body is knocked out", reasons)
+    check("the report says the language was deduced", "deducido" in reasons[0])
+
+
+def test_a_spanish_body_survives_a_blank_lang_field():
+    check(
+        "Spanish prose is not mistaken for English",
+        not knockouts(make_job(lang="lang_not_specified", text=ES_BODY), PROFILE),
+    )
+
+
+def test_a_declared_language_is_never_second_guessed():
+    """`lang` is what the employer chose to publish under. Only a blank field
+    gets sniffed — otherwise a Spanish posting quoting an English job
+    description could be dropped on the strength of the quote."""
+    check(
+        "a declared 'es' is trusted over the prose",
+        not knockouts(make_job(lang="es", text=EN_BODY), PROFILE),
+    )
+
+
+def test_a_stub_posting_is_left_alone():
+    check("too little prose returns no verdict", detect_lang("Backend Developer") is None)
 
 
 if __name__ == "__main__":
