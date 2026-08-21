@@ -21,6 +21,7 @@ single aria-live region hoping to be announced.
 from __future__ import annotations
 
 import html
+import json
 import threading
 import traceback
 import urllib.parse
@@ -136,6 +137,24 @@ def group_axes(params: dict) -> tuple[str, str]:
     return axis, sub
 
 
+ICONS_JSON = json.dumps(profiles.ICON_SLUGS, ensure_ascii=False)
+
+
+def _icon(term: str) -> str:
+    """A small monochrome brand icon for a known term, or nothing.
+
+    Served from the Simple Icons CDN in a neutral gray so logos read as quiet
+    marks, not a rainbow. Offline or unknown slugs remove themselves.
+    """
+    slug = profiles.ICON_SLUGS.get(term.lower())
+    if not slug:
+        return ""
+    return (
+        f'<img class="ticon" src="https://cdn.simpleicons.org/{slug}/8a94a0" '
+        f'alt="" loading="lazy" onerror="this.remove()">'
+    )
+
+
 # --------------------------------------------------------------------------
 # formatting
 # --------------------------------------------------------------------------
@@ -240,6 +259,8 @@ CSS = """
   --amber: #7d4a10;
   --amber-bg: #f8ecda;
   --focus: #0b7a4b;
+  --lift: 0 1px 2px rgba(15, 23, 32, 0.05), 0 10px 28px -20px rgba(15, 23, 32, 0.35);
+  --glow: rgba(255, 255, 255, 0);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -257,6 +278,8 @@ CSS = """
     --amber: #e3b077;
     --amber-bg: #2e2210;
     --focus: #3ecf8e;
+    --lift: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+    --glow: rgba(255, 255, 255, 0.022);
   }
 }
 
@@ -366,6 +389,11 @@ input::placeholder, textarea::placeholder { color: var(--ink-3); }
 
 .page-head { margin: 0 0 28px; }
 .page-head h1 { font-size: 26px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 8px; }
+.page-head h1::after {
+  content: ""; display: block; width: 30px; height: 4px; border-radius: 2px;
+  background: var(--signal); margin-top: 10px;
+  animation: growx 480ms cubic-bezier(0.23, 1, 0.32, 1) backwards; transform-origin: left;
+}
 .statline { font-size: 13.5px; color: var(--ink-2); margin: 0; }
 .statline b { color: var(--ink); font-weight: 600; }
 
@@ -373,7 +401,9 @@ input::placeholder, textarea::placeholder { color: var(--ink-3); }
   display: grid; grid-template-columns: minmax(220px, 1.6fr) 96px 160px 176px 176px;
   gap: 12px; align-items: end;
   padding: 16px; margin: 0 0 10px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  background: linear-gradient(180deg, var(--glow), transparent 72px), var(--surface);
+  border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: var(--lift);
 }
 .toolbar-foot {
   grid-column: 1 / -1; display: flex; align-items: center; gap: 10px;
@@ -431,7 +461,9 @@ details.sub > summary::-webkit-details-marker { display: none; }
    glance instead of floating on the page background */
 ol.jobs {
   list-style: none; margin: 0; padding: 0;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  background: linear-gradient(180deg, var(--glow), transparent 72px), var(--surface);
+  border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: var(--lift);
 }
 li.job {
   display: grid; grid-template-columns: 40px minmax(0, 1fr) auto;
@@ -507,8 +539,10 @@ li.job .meta b { color: var(--ink-2); font-weight: 500; }
 .detail-head + section.panel, .detail-head ~ section.panel { max-width: 800px; }
 .btn { text-decoration: none; display: inline-block; }
 .panel {
-  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  background: linear-gradient(180deg, var(--glow), transparent 72px), var(--surface);
+  border: 1px solid var(--line); border-radius: 10px;
   padding: 24px; margin: 0 0 18px;
+  box-shadow: var(--lift);
 }
 .panel h2 { font-size: 13px; font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase;
   color: var(--ink-2); margin: 0 0 16px; font-family: ui-monospace, Consolas, monospace; }
@@ -529,6 +563,13 @@ table.parts tfoot th, table.parts tfoot td { font-weight: 650; border-bottom: no
 /* -- forms (perfil, cv) ------------------------------------------------- */
 
 .form-grid { display: grid; gap: 18px; max-width: 860px; }
+.form-grid > * { animation: rise 300ms cubic-bezier(0.23, 1, 0.32, 1) backwards; }
+.form-grid > *:nth-child(1) { animation-delay: 40ms; }
+.form-grid > *:nth-child(2) { animation-delay: 90ms; }
+.form-grid > *:nth-child(3) { animation-delay: 140ms; }
+.form-grid > *:nth-child(4) { animation-delay: 190ms; }
+.form-grid > *:nth-child(5) { animation-delay: 240ms; }
+.form-grid > *:nth-child(6) { animation-delay: 290ms; }
 .form-grid .panel { margin: 0; display: grid; gap: 16px; }
 .cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .cols-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
@@ -584,6 +625,8 @@ table.parts tfoot th, table.parts tfoot td { font-weight: 650; border-bottom: no
   transition: border-color 120ms ease-out, background 120ms ease-out;
 }
 .preset-card:hover { border-color: var(--ink-3); }
+.preset-card:active { transform: scale(0.98); }
+.preset-card { will-change: transform; transition: border-color 120ms ease-out, background 120ms ease-out, transform 120ms cubic-bezier(0.23, 1, 0.32, 1); }
 .preset-card strong { font-size: 14.5px; font-weight: 600; }
 .preset-card span { font-size: 12.5px; color: var(--ink-3); line-height: 1.45; }
 .preset-card input { position: absolute; opacity: 0; pointer-events: none; }
@@ -605,6 +648,37 @@ details.adv[open] > summary::before { content: "▾ "; }
 details.adv > summary:hover { color: var(--ink); border-color: var(--ink-3); }
 details.adv > .panel { margin-top: 14px; }
 details.adv[open] > .panel { animation: reveal 220ms cubic-bezier(0.23, 1, 0.32, 1); }
+
+/* -- suggestions & icons ------------------------------------------------ */
+
+.ticon { width: 14px; height: 14px; vertical-align: -2.5px; margin-right: 7px; opacity: 0.9; }
+.chip .ticon { width: 12px; height: 12px; margin-right: 5px; vertical-align: -2px; }
+.chip-item .ticon { margin-right: 2px; }
+.sugs { display: grid; gap: 9px; margin-top: 2px; }
+.sug { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.sug-name {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--ink-3);
+  flex-basis: 100%;
+}
+.sug button {
+  display: inline-flex; align-items: center;
+  font-family: "Cascadia Code", ui-monospace, Consolas, monospace; font-size: 12px;
+  padding: 4.5px 11px; border-radius: 999px; cursor: pointer;
+  background: transparent; border: 1px solid var(--line); color: var(--ink-2);
+  transition: border-color 120ms ease-out, color 120ms ease-out,
+    background 120ms ease-out, transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.sug button::before { content: "+"; margin-right: 6px; color: var(--signal); font-weight: 600; }
+.sug button small { margin-left: 5px; color: var(--ink-3); font-size: 10.5px; }
+.sug button:hover { border-color: var(--signal); color: var(--ink); filter: none; }
+.sug button:active { transform: scale(0.96); }
+.sug button.added {
+  color: var(--signal); background: var(--signal-soft); border-color: transparent;
+  cursor: default;
+}
+.sug button.added::before { content: "✓"; }
 
 /* -- progress & drops --------------------------------------------------- */
 
@@ -777,7 +851,7 @@ def render_job_card(row: dict, top: float, seniority: dict, rank: int = 0) -> st
     badge = '<span class="badge">NUEVA</span>' if row["is_new"] else ""
     chips = ""
     if row.get("matched") or row.get("penalized"):
-        hit = "".join(f'<span class="chip hit">{e(t)}</span>' for t in row.get("matched", []))
+        hit = "".join(f'<span class="chip hit">{_icon(t)}{e(t)}</span>' for t in row.get("matched", []))
         warn = "".join(f'<span class="chip warn">{e(t)}</span>' for t in row.get("penalized", []))
         chips = f'<p class="chips">{hit}{warn}</p>'
     return f"""<li class="job">
@@ -930,7 +1004,7 @@ def render_detail(result: scan.Result | None, job_id: str) -> tuple[int, bytes]:
         for k, v in row["parts"].items()
     )
     sim = "no calculada" if row["semantic"] is None else f"{row['semantic']:.3f}"
-    matched = "".join(f'<span class="chip hit">{e(t)}</span>' for t in row["matched"]) or (
+    matched = "".join(f'<span class="chip hit">{_icon(t)}{e(t)}</span>' for t in row["matched"]) or (
         '<span class="none">ninguno</span>'
     )
     penalized = "".join(f'<span class="chip warn">{e(t)}</span>' for t in row["penalized"]) or (
@@ -1049,7 +1123,31 @@ def _chipfield(
 # star marks a term as key (weight 4 instead of 2). The textarea stays the
 # source of truth and is rewritten on every change, so submitting works
 # identically with the script, without it, or halfway through a repaint.
-CHIPS_JS = """
+CHIPS_JS = r"""
+function iconFor(term) {
+  var slug = TERM_ICONS[term.toLowerCase()];
+  if (!slug) return null;
+  var img = document.createElement('img');
+  img.className = 'ticon';
+  img.src = 'https://cdn.simpleicons.org/' + slug + '/8a94a0';
+  img.alt = '';
+  img.loading = 'lazy';
+  img.addEventListener('error', function () { img.remove(); });
+  return img;
+}
+
+var FIELDS = {};
+
+function refreshSuggestions() {
+  document.querySelectorAll('button[data-add]').forEach(function (btn) {
+    var field = FIELDS[btn.getAttribute('data-target')];
+    if (!field) return;
+    var all = btn.getAttribute('data-add').split('|').every(field.has);
+    btn.classList.toggle('added', all);
+    btn.disabled = all;
+  });
+}
+
 document.querySelectorAll('textarea[data-chips]').forEach(function (area) {
   var starred = area.closest('.chipfield').hasAttribute('data-starred');
   var label = document.querySelector('label[for="' + area.id + '"]');
@@ -1060,7 +1158,7 @@ document.querySelectorAll('textarea[data-chips]').forEach(function (area) {
     var w = m.length > 1 ? parseFloat(m[1].replace(',', '.')) : NaN;
     return { term: term, weight: isNaN(w) ? 2 : w };
   }
-  var items = area.value.split('\\n').filter(function (l) { return l.trim(); }).map(parse);
+  var items = area.value.split('\n').filter(function (l) { return l.trim(); }).map(parse);
 
   var box = document.createElement('div');
   box.className = 'chips-box';
@@ -1074,16 +1172,22 @@ document.querySelectorAll('textarea[data-chips]').forEach(function (area) {
   add.className = 'chip-add';
   add.textContent = 'Agregar';
 
+  function has(term) {
+    return items.some(function (it) { return it.term.toLowerCase() === term.toLowerCase(); });
+  }
   function sync() {
     area.value = items.map(function (it) {
       return starred ? it.term + ' = ' + it.weight : it.term;
-    }).join('\\n');
+    }).join('\n');
+    refreshSuggestions();
   }
   function render() {
     box.querySelectorAll('.chip-item').forEach(function (n) { n.remove(); });
     items.forEach(function (it, i) {
       var chip = document.createElement('span');
       chip.className = 'chip-item' + (starred && it.weight >= 3 ? ' key' : '');
+      var icon = iconFor(it.term);
+      if (icon) chip.appendChild(icon);
       var txt = document.createElement('span');
       txt.textContent = it.term;
       chip.appendChild(txt);
@@ -1104,7 +1208,7 @@ document.querySelectorAll('textarea[data-chips]').forEach(function (area) {
       var x = document.createElement('button');
       x.type = 'button';
       x.className = 'chip-x';
-      x.textContent = '\\u00d7';
+      x.textContent = '×';
       x.setAttribute('aria-label', 'Quitar ' + it.term);
       x.addEventListener('click', function () {
         items.splice(i, 1);
@@ -1114,14 +1218,13 @@ document.querySelectorAll('textarea[data-chips]').forEach(function (area) {
       box.insertBefore(chip, entry);
     });
   }
+  function push(term) {
+    if (term && !has(term)) items.push({ term: term, weight: 2 });
+  }
   function commit() {
     var raw = entry.value.trim().replace(/,$/, '');
     if (!raw) return;
-    raw.split(',').map(function (t) { return t.trim(); }).filter(Boolean).forEach(function (term) {
-      if (!items.some(function (it) { return it.term.toLowerCase() === term.toLowerCase(); })) {
-        items.push({ term: term, weight: 2 });
-      }
-    });
+    raw.split(',').map(function (t) { return t.trim(); }).filter(Boolean).forEach(push);
     entry.value = '';
     sync(); render();
   }
@@ -1140,9 +1243,49 @@ document.querySelectorAll('textarea[data-chips]').forEach(function (area) {
   area.setAttribute('aria-hidden', 'true');
   area.tabIndex = -1;
   area.insertAdjacentElement('afterend', box);
+
+  FIELDS[area.name] = {
+    has: has,
+    add: function (term) { push(term); sync(); render(); },
+  };
   render();
 });
+
+document.querySelectorAll('button[data-add]').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var field = FIELDS[btn.getAttribute('data-target')];
+    if (!field) return;
+    btn.getAttribute('data-add').split('|').forEach(field.add);
+  });
+});
+refreshSuggestions();
 """
+
+
+def _suggestions(target: str, groups: dict[str, list[str]], *, packs: bool = False) -> str:
+    """Rows of one-click additions for a chip field.
+
+    `packs` renders one button per group (the whole family at once); otherwise
+    one button per term. Clicking beats typing: recognizing a term you use is
+    one decision, remembering the list is a working-memory tax.
+    """
+    rows = []
+    for name, terms in groups.items():
+        if packs:
+            joined = "|".join(terms)
+            buttons = (
+                f'<button type="button" data-target="{e(target)}" data-add="{e(joined)}">'
+                f"{e(name)} <small>({len(terms)})</small></button>"
+            )
+        else:
+            buttons = "".join(
+                f'<button type="button" data-target="{e(target)}" data-add="{e(t)}">'
+                f"{_icon(t)}{e(t)}</button>"
+                for t in terms
+            )
+            buttons = f'<span class="sug-name">{e(name)}</span>{buttons}'
+        rows.append(f'<div class="sug">{buttons}</div>')
+    return '<div class="sugs">' + "".join(rows) + "</div>"
 
 
 def render_profile_page(
@@ -1152,6 +1295,7 @@ def render_profile_page(
     errors: list[str] | None = None,
     saved: bool = False,
     last_sweep: str | None = None,
+    local_models: list[str] | None = None,
 ) -> bytes:
     identity = profile.get("identity", {})
     search = profile.get("search", {})
@@ -1162,6 +1306,13 @@ def render_profile_page(
 
     stack_lines = [f"{term} = {weight}" for term, weight in stack.items()]
     current_preset = profiles.detect_preset(scoring) if scoring else "equilibrado"
+
+    # What this machine actually has installed leads the suggestions: it is
+    # the one group guaranteed to be true for this person.
+    stack_suggestions: dict[str, list[str]] = {}
+    if local_models:
+        stack_suggestions["Tus modelos de Ollama"] = list(local_models)
+    stack_suggestions.update(profiles.STACK_SUGGESTIONS)
 
     preset_cards = "".join(
         f"""<label class="preset-card" for="pr-{key}">
@@ -1221,12 +1372,14 @@ def render_profile_page(
   <section class="panel">
     <h2>2 · Tu stack</h2>
     {_chipfield("stack", "Tecnologías que sumen puntos", stack_lines, starred=True, rows=8,
-                hint="Escribí una y Enter. La ★ marca las claves — valen el doble.")}
+                hint="Escribí una y Enter, o tocá una sugerencia. La ★ marca las claves — valen el doble.")}
+    {_suggestions("stack", stack_suggestions)}
   </section>
   <section class="panel">
     <h2>3 · Lo que no querés ni ver</h2>
     {_chipfield("exclude_in_title", "Tecnologías vetadas", filters.get("exclude_in_title", []), rows=5,
-                hint="Si aparecen en el título del aviso, se descarta solo.")}
+                hint="Si aparecen en el título del aviso, se descarta solo. Un pack agrega la familia entera.")}
+    {_suggestions("exclude_in_title", profiles.VETO_PACKS, packs=True)}
   </section>
   <section class="panel">
     <h2>4 · Qué te importa más</h2>
@@ -1289,7 +1442,7 @@ def render_profile_page(
     {saved_note}
   </div>
 </form>
-<script>{CHIPS_JS}</script>"""
+<script>var TERM_ICONS = {ICONS_JSON};{CHIPS_JS}</script>"""
     return shell("Perfil", body, active="/perfil", last_sweep=last_sweep)
 
 
@@ -1440,6 +1593,7 @@ def make_handler(*, profile_path: Path, db: Path, no_semantic: bool):
                     self._send(200, render_profile_page(
                         profile, _seniority_names(last), saved="ok" in params,
                         last_sweep=fmt_when(last.finished_at) if last else None,
+                        local_models=[] if no_semantic else embed.list_models(),
                     ))
                 elif path == "/cv":
                     ready = not no_semantic and not isinstance(

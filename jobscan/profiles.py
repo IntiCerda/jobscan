@@ -78,6 +78,58 @@ def detect_preset(scoring: dict) -> str:
     return "custom"
 
 
+# One-click suggestion groups for the stack field. Clicking beats typing for
+# recall: recognizing a term you use is one decision, remembering the whole
+# list is a working-memory tax.
+STACK_SUGGESTIONS = {
+    "Lenguajes & backend": [
+        "python", "fastapi", "django", "node", "typescript", "nestjs", "go", "rust",
+    ],
+    "Frontend": ["react", "next.js", "vue", "angular", "svelte", "tailwind"],
+    "Datos & bases": ["postgresql", "mongodb", "redis", "kafka", "elasticsearch"],
+    "IA & modelos locales": [
+        "llm", "rag", "embedding", "pgvector", "langchain", "ollama",
+        "llama", "qwen", "deepseek", "mistral", "kimi", "nvidia",
+    ],
+    "Cloud & DevOps": [
+        "docker", "kubernetes", "terraform", "aws", "gcp", "grafana", "prometheus",
+    ],
+}
+
+# Veto packs: whole families that usually travel together. One click adds the
+# family; individual x removes any survivor worth keeping.
+VETO_PACKS = {
+    "Mundo Java": ["java", "spring"],
+    "Microsoft / .NET": [".net", "c#", "sharepoint"],
+    "Enterprise legacy": ["sap", "abap", "oracle", "pl/sql", "cobol", "mainframe"],
+    "CMS & e-commerce": ["wordpress", "shopify", "vtex", "magento"],
+    "PHP": ["php", "laravel"],
+}
+
+# term -> Simple Icons slug, for the small monochrome logos on chips. A term
+# that is not here (or a slug the CDN lacks) simply renders without an icon.
+ICON_SLUGS = {
+    "python": "python", "fastapi": "fastapi", "django": "django",
+    "node": "nodedotjs", "node.js": "nodedotjs", "typescript": "typescript",
+    "nestjs": "nestjs", "go": "go", "rust": "rust",
+    "react": "react", "next.js": "nextdotjs", "vue": "vuedotjs",
+    "angular": "angular", "svelte": "svelte", "tailwind": "tailwindcss",
+    "postgresql": "postgresql", "postgres": "postgresql", "mongodb": "mongodb",
+    "redis": "redis", "kafka": "apachekafka", "elasticsearch": "elasticsearch",
+    "ollama": "ollama", "langchain": "langchain", "llama": "meta",
+    "qwen": "alibabacloud", "deepseek": "deepseek", "mistral": "mistralai",
+    "nvidia": "nvidia", "docker": "docker", "kubernetes": "kubernetes",
+    "terraform": "terraform", "aws": "amazonwebservices", "gcp": "googlecloud",
+    "grafana": "grafana", "prometheus": "prometheus", "pytest": "pytest",
+    "java": "openjdk", "spring": "spring", "php": "php", "laravel": "laravel",
+    "wordpress": "wordpress", "shopify": "shopify", "oracle": "oracle",
+    "ruby": "ruby", "rails": "rubyonrails", "salesforce": "salesforce",
+    "sap": "sap", "cobol": "ibm", "vtex": "vtex", "magento": "magento",
+    ".net": "dotnet", "c#": "dotnet", "flutter": "flutter", "swift": "swift",
+    "kotlin": "kotlin", "graphql": "graphql", "git": "git",
+}
+
+
 # GetOnBoard's own quality flags a posting can carry, with what they mean.
 KNOWN_FLAGS = {
     "talent_pool": "junta CVs sin un puesto concreto",

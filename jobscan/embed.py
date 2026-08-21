@@ -94,6 +94,22 @@ class OllamaEmbedder:
         return None
 
 
+def list_models(url: str = DEFAULT_URL) -> list[str]:
+    """Names of the models a local Ollama holds, base name only, [] if absent.
+
+    Used by the profile page to offer what is actually installed as one-click
+    suggestions instead of asking the person to remember what they pulled.
+    """
+    try:
+        req = urllib.request.Request(f"{url.rstrip('/')}/api/tags")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            models = json.loads(resp.read()).get("models", [])
+        names = {m.get("name", "").split(":")[0] for m in models}
+        return sorted(n for n in names if n)
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+        return []
+
+
 def resolve(url: str = DEFAULT_URL, model: str = DEFAULT_MODEL) -> Embedder:
     """Pick the best available backend. Probing once here means the caller does
     not have to care which one it got."""
