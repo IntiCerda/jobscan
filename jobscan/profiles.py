@@ -41,6 +41,43 @@ SENIORITY_FALLBACK = {
     "5": "Expert",
 }
 
+# Named weight sets, so choosing what matters is one decision instead of six
+# numbers. "custom" means the numeric fields are read as-is.
+PRESETS = {
+    "equilibrado": {
+        "weight_stack": 14.0, "weight_semantic": 12.0, "weight_competition": 8.0,
+        "weight_freshness": 5.0, "weight_salary": 3.0, "weight_seniority": 4.0,
+    },
+    "nuevas": {
+        "weight_stack": 10.0, "weight_semantic": 8.0, "weight_competition": 10.0,
+        "weight_freshness": 9.0, "weight_salary": 3.0, "weight_seniority": 4.0,
+    },
+    "sueldo": {
+        "weight_stack": 12.0, "weight_semantic": 10.0, "weight_competition": 6.0,
+        "weight_freshness": 4.0, "weight_salary": 8.0, "weight_seniority": 4.0,
+    },
+    "match": {
+        "weight_stack": 16.0, "weight_semantic": 14.0, "weight_competition": 5.0,
+        "weight_freshness": 4.0, "weight_salary": 3.0, "weight_seniority": 4.0,
+    },
+}
+
+PRESET_LABELS = {
+    "equilibrado": ("Equilibrado", "un poco de todo, el punto de partida"),
+    "nuevas": ("Primero lo nuevo", "avisos frescos y con poca competencia arriba"),
+    "sueldo": ("Mejor pagado", "el sueldo publicado pesa mucho más"),
+    "match": ("Mi stack exacto", "prioriza coincidencia técnica sobre todo"),
+}
+
+
+def detect_preset(scoring: dict) -> str:
+    """Which preset the stored weights correspond to, or "custom"."""
+    for name, weights in PRESETS.items():
+        if all(float(scoring.get(k, -1)) == v for k, v in weights.items()):
+            return name
+    return "custom"
+
+
 # GetOnBoard's own quality flags a posting can carry, with what they mean.
 KNOWN_FLAGS = {
     "talent_pool": "junta CVs sin un puesto concreto",
@@ -208,6 +245,14 @@ def from_form(form: dict[str, list[str]]) -> tuple[dict, list[str]]:
     def int_list(name: str) -> list[int]:
         return sorted(int(v) for v in many(name) if v.isdigit())
 
+    # A named preset overrides the six weight numbers: picking what matters
+    # is one decision, and the numeric grid only counts when asked for.
+    preset = (form.get("preset") or ["custom"])[0]
+    weights = PRESETS.get(preset) or {
+        k: numbers.get(k, PRESETS["equilibrado"][k])
+        for k in PRESETS["equilibrado"]
+    }
+
     profile = {
         "identity": {"summary": summary},
         "search": {
@@ -225,12 +270,7 @@ def from_form(form: dict[str, list[str]]) -> tuple[dict, list[str]]:
         },
         "fit": {"stack": stack},
         "scoring": {
-            "weight_stack": numbers.get("weight_stack", 14.0),
-            "weight_semantic": numbers.get("weight_semantic", 12.0),
-            "weight_competition": numbers.get("weight_competition", 8.0),
-            "weight_freshness": numbers.get("weight_freshness", 5.0),
-            "weight_salary": numbers.get("weight_salary", 3.0),
-            "weight_seniority": numbers.get("weight_seniority", 4.0),
+            **weights,
             "stack_half_point": numbers.get("stack_half_point", 12.0),
             "good_applications_count": int(numbers.get("good_applications_count", 100)),
             "stale_after_days": numbers.get("stale_after_days", 45.0),

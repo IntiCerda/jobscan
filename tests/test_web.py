@@ -440,6 +440,68 @@ def test_a_valid_form_writes_a_profile_the_scanner_can_read():
               path.with_suffix(".toml.bak").exists())
 
 
+def test_a_preset_decides_the_weights_and_custom_respects_the_numbers():
+    # Choosing what matters is one decision, not six numbers. But someone who
+    # tuned their numbers by hand must never have them silently replaced.
+    from jobscan import profiles
+
+    base = {
+        "summary": ["dev"], "queries": ["python"], "stack": ["python = 3"],
+        "stack_half_point": ["12"], "good_applications_count": ["100"],
+        "stale_after_days": ["45"], "target_salary_usd": ["2000"],
+        "weight_stack": ["9"], "weight_semantic": ["9"], "weight_competition": ["9"],
+        "weight_freshness": ["9"], "weight_salary": ["9"], "weight_seniority": ["9"],
+    }
+    prof, errors = profiles.from_form({**base, "preset": ["sueldo"]})
+    check("a named preset has no errors", errors == [])
+    check("the preset overrides the numeric fields",
+          prof["scoring"]["weight_salary"] == 8.0 and prof["scoring"]["weight_stack"] == 12.0)
+    check("the stored weights round-trip to the same preset",
+          profiles.detect_preset(prof["scoring"]) == "sueldo")
+
+    prof, _ = profiles.from_form({**base, "preset": ["custom"]})
+    check("custom reads the numbers as typed", prof["scoring"]["weight_stack"] == 9.0)
+    prof, _ = profiles.from_form(base)  # no preset field at all (old form, no JS)
+    check("an absent preset falls back to the numbers", prof["scoring"]["weight_stack"] == 9.0)
+
+
+def test_the_chip_fields_degrade_to_plain_textareas():
+    # The chips are JavaScript; the data is the textarea underneath. Without
+    # the script the form must still carry every list under its old name.
+    from jobscan import profiles as profiles_mod
+
+    page = web.render_profile_page(
+        {"identity": {}, "search": {"queries": ["python", "node"]},
+         "filters": {"exclude_in_title": ["oracle"]}, "scoring": {},
+         "fit": {"stack": {"python": 3.0}}, "seniority": {}},
+        profiles_mod.SENIORITY_FALLBACK,
+    ).decode()
+    for name in ("stack", "queries", "exclude_in_title", "penalize_in_body", "allowed_categories"):
+        check(f"the {name} textarea survives as the source of truth",
+              f'name="{name}" rows=' in page)
+    check("the stored stack lands as term = weight lines", "python = 3.0" in page)
+    check("the queries land one per line", "python\nnode" in page)
+    check("the upgrade script ships with the page", "data-chips" in page and "<script>" in page)
+
+
+def test_the_advanced_settings_arrive_folded():
+    # The whole point of the redesign: four simple steps visible, everything
+    # else behind one closed fold with working defaults.
+    from jobscan import profiles as profiles_mod
+
+    page = web.render_profile_page(
+        {"identity": {}, "search": {}, "filters": {}, "scoring": {}, "fit": {}, "seniority": {}},
+        profiles_mod.SENIORITY_FALLBACK,
+    ).decode()
+    check("the advanced fold exists and starts closed",
+          '<details class="adv">' in page and '<details class="adv" open' not in page)
+    check("the weight numbers live inside the fold",
+          page.index('name="weight_stack"') > page.index('<details class="adv">'))
+    check("the preset cards are outside the fold",
+          page.index('name="preset"') < page.index('<details class="adv">'))
+    check("every preset is offered plus custom", page.count('name="preset"') == 5)
+
+
 def test_the_cv_reaches_the_semantic_reference():
     # A CV that saves fine but never reaches the embedding is the quiet
     # failure: the page says "guardado" and the ranking ignores it forever.

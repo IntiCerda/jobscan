@@ -542,6 +542,70 @@ table.parts tfoot th, table.parts tfoot td { font-weight: 650; border-bottom: no
 }
 .errors ul { margin: 6px 0 0; padding-left: 18px; }
 
+/* -- chips, presets, advanced ------------------------------------------- */
+
+.js-hidden { display: none; }
+.chips-box {
+  display: flex; flex-wrap: wrap; gap: 7px; align-items: center;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 9px 10px; min-height: 46px;
+}
+.chips-box:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+.chip-item {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: "Cascadia Code", ui-monospace, Consolas, monospace; font-size: 12.5px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
+  padding: 4px 6px 4px 12px; color: var(--ink);
+  animation: rise 180ms cubic-bezier(0.23, 1, 0.32, 1) backwards;
+}
+.chip-item.key { border-color: var(--signal); color: var(--signal); }
+.chip-star, .chip-x {
+  border: none; background: transparent; cursor: pointer; padding: 2px 5px;
+  font-size: 13px; line-height: 1; color: var(--ink-3); border-radius: 999px;
+  transition: color 120ms ease-out, background 120ms ease-out;
+}
+.chip-star:hover, .chip-x:hover { color: var(--ink); background: var(--line-2); }
+.chip-item.key .chip-star { color: var(--signal); }
+.chip-x:hover { color: var(--amber); }
+.chip-entry {
+  flex: 1; min-width: 150px; border: none !important; background: transparent !important;
+  padding: 6px 4px !important; font-size: 14px !important; outline: none !important;
+}
+.chip-add {
+  font-size: 12.5px; font-weight: 600; padding: 6px 12px;
+  background: transparent; color: var(--ink-2); border: 1px solid var(--line);
+}
+.chip-add:hover { color: var(--ink); border-color: var(--ink-3); filter: none; }
+
+.presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.preset-card {
+  display: grid; gap: 4px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 9px; padding: 13px 14px;
+  transition: border-color 120ms ease-out, background 120ms ease-out;
+}
+.preset-card:hover { border-color: var(--ink-3); }
+.preset-card strong { font-size: 14.5px; font-weight: 600; }
+.preset-card span { font-size: 12.5px; color: var(--ink-3); line-height: 1.45; }
+.preset-card input { position: absolute; opacity: 0; pointer-events: none; }
+.preset-card:has(input:checked) {
+  border-color: var(--signal); background: var(--signal-soft);
+}
+.preset-card:has(input:checked) strong { color: var(--signal); }
+.preset-card:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+details.adv { margin: 6px 0 0; max-width: 860px; }
+details.adv > summary {
+  cursor: pointer; font-size: 14px; font-weight: 500; color: var(--ink-2);
+  padding: 12px 16px; border: 1px dashed var(--line); border-radius: 9px;
+  list-style: none; transition: color 120ms ease-out, border-color 120ms ease-out;
+}
+details.adv > summary::-webkit-details-marker { display: none; }
+details.adv > summary::before { content: "▸ "; color: var(--ink-3); }
+details.adv[open] > summary::before { content: "▾ "; }
+details.adv > summary:hover { color: var(--ink); border-color: var(--ink-3); }
+details.adv > .panel { margin-top: 14px; }
+details.adv[open] > .panel { animation: reveal 220ms cubic-bezier(0.23, 1, 0.32, 1); }
+
 /* -- progress & drops --------------------------------------------------- */
 
 .log {
@@ -958,6 +1022,129 @@ def _number(name: str, label: str, value, *, step: str = "0.5") -> str:
 </div>"""
 
 
+def _chipfield(
+    name: str,
+    label: str,
+    lines: list[str],
+    *,
+    hint: str = "",
+    starred: bool = False,
+    rows: int = 4,
+) -> str:
+    """A list field: a plain textarea that the page script upgrades to chips.
+
+    The textarea keeps the form's name, so the server reads the same field
+    with or without JavaScript — the chips are presentation, never the data.
+    """
+    hint_html = f'<p class="hint">{e(hint)}</p>' if hint else ""
+    star_attr = ' data-starred="1"' if starred else ""
+    return f"""<div class="field chipfield"{star_attr}>
+  <label for="p-{name}">{e(label)}</label>
+  <textarea id="p-{name}" name="{name}" rows="{rows}" data-chips>{e(chr(10).join(lines))}</textarea>
+  {hint_html}</div>"""
+
+
+# Upgrades every [data-chips] textarea into a chip editor: type, Enter (or
+# coma, or the button) adds a bubble; the x removes it; on starred fields the
+# star marks a term as key (weight 4 instead of 2). The textarea stays the
+# source of truth and is rewritten on every change, so submitting works
+# identically with the script, without it, or halfway through a repaint.
+CHIPS_JS = """
+document.querySelectorAll('textarea[data-chips]').forEach(function (area) {
+  var starred = area.closest('.chipfield').hasAttribute('data-starred');
+  var label = document.querySelector('label[for="' + area.id + '"]');
+
+  function parse(line) {
+    var m = line.split('=');
+    var term = m[0].trim().replace(/^"|"$/g, '');
+    var w = m.length > 1 ? parseFloat(m[1].replace(',', '.')) : NaN;
+    return { term: term, weight: isNaN(w) ? 2 : w };
+  }
+  var items = area.value.split('\\n').filter(function (l) { return l.trim(); }).map(parse);
+
+  var box = document.createElement('div');
+  box.className = 'chips-box';
+  var entry = document.createElement('input');
+  entry.type = 'text';
+  entry.className = 'chip-entry';
+  entry.placeholder = 'escribí y Enter…';
+  if (label) entry.setAttribute('aria-label', 'Agregar a: ' + label.textContent);
+  var add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'chip-add';
+  add.textContent = 'Agregar';
+
+  function sync() {
+    area.value = items.map(function (it) {
+      return starred ? it.term + ' = ' + it.weight : it.term;
+    }).join('\\n');
+  }
+  function render() {
+    box.querySelectorAll('.chip-item').forEach(function (n) { n.remove(); });
+    items.forEach(function (it, i) {
+      var chip = document.createElement('span');
+      chip.className = 'chip-item' + (starred && it.weight >= 3 ? ' key' : '');
+      var txt = document.createElement('span');
+      txt.textContent = it.term;
+      chip.appendChild(txt);
+      if (starred) {
+        var star = document.createElement('button');
+        star.type = 'button';
+        star.className = 'chip-star';
+        star.textContent = '★';
+        star.title = 'Marcar como clave (vale más puntos)';
+        star.setAttribute('aria-label', (it.weight >= 3 ? 'Quitar clave a ' : 'Marcar clave ') + it.term);
+        star.setAttribute('aria-pressed', it.weight >= 3 ? 'true' : 'false');
+        star.addEventListener('click', function () {
+          it.weight = it.weight >= 3 ? 2 : 4;
+          sync(); render();
+        });
+        chip.appendChild(star);
+      }
+      var x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'chip-x';
+      x.textContent = '\\u00d7';
+      x.setAttribute('aria-label', 'Quitar ' + it.term);
+      x.addEventListener('click', function () {
+        items.splice(i, 1);
+        sync(); render();
+      });
+      chip.appendChild(x);
+      box.insertBefore(chip, entry);
+    });
+  }
+  function commit() {
+    var raw = entry.value.trim().replace(/,$/, '');
+    if (!raw) return;
+    raw.split(',').map(function (t) { return t.trim(); }).filter(Boolean).forEach(function (term) {
+      if (!items.some(function (it) { return it.term.toLowerCase() === term.toLowerCase(); })) {
+        items.push({ term: term, weight: 2 });
+      }
+    });
+    entry.value = '';
+    sync(); render();
+  }
+  entry.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter' || ev.key === ',') { ev.preventDefault(); commit(); }
+    else if (ev.key === 'Backspace' && !entry.value && items.length) {
+      items.pop(); sync(); render();
+    }
+  });
+  add.addEventListener('click', commit);
+  entry.addEventListener('blur', commit);
+
+  box.appendChild(entry);
+  box.appendChild(add);
+  area.classList.add('js-hidden');
+  area.setAttribute('aria-hidden', 'true');
+  area.tabIndex = -1;
+  area.insertAdjacentElement('afterend', box);
+  render();
+});
+"""
+
+
 def render_profile_page(
     profile: dict,
     seniority_names: dict[str, str],
@@ -973,7 +1160,22 @@ def render_profile_page(
     stack = profile.get("fit", {}).get("stack", {})
     seniority = profile.get("seniority", {})
 
-    stack_text = "\n".join(f"{term} = {weight}" for term, weight in stack.items())
+    stack_lines = [f"{term} = {weight}" for term, weight in stack.items()]
+    current_preset = profiles.detect_preset(scoring) if scoring else "equilibrado"
+
+    preset_cards = "".join(
+        f"""<label class="preset-card" for="pr-{key}">
+  <input type="radio" id="pr-{key}" name="preset" value="{key}"{
+            " checked" if current_preset == key else ""}>
+  <strong>{e(title)}</strong><span>{e(desc)}</span>
+</label>"""
+        for key, (title, desc) in profiles.PRESET_LABELS.items()
+    ) + f"""<label class="preset-card" for="pr-custom">
+  <input type="radio" id="pr-custom" name="preset" value="custom"{
+        " checked" if current_preset == "custom" else ""}>
+  <strong>Personalizado</strong><span>los números finos, en ajustes avanzados</span>
+</label>"""
+
     flag_checks = "".join(
         f"""<div class="field check">
   <input type="checkbox" id="fl-{e(flag)}" name="exclude_flags" value="{e(flag)}"{
@@ -984,12 +1186,15 @@ def render_profile_page(
 
     def seniority_checks(field_name: str, chosen: list) -> str:
         chosen_set = set(chosen)
+        # Sorted by the id, which the API defines junior-to-expert: a scale
+        # the eye can walk, instead of whatever order the dict arrived in.
+        ordered = sorted(seniority_names.items(), key=lambda kv: int(kv[0]))
         return "".join(
             f"""<div class="field check">
   <input type="checkbox" id="{field_name}-{sid}" name="{field_name}" value="{sid}"{
                 " checked" if int(sid) in chosen_set else ""}>
   <label for="{field_name}-{sid}">{e(name)}</label></div>"""
-            for sid, name in seniority_names.items()
+            for sid, name in ordered
         )
 
     error_block = ""
@@ -1003,80 +1208,88 @@ def render_profile_page(
 
     body = f"""<header class="page-head">
   <h1>Perfil</h1>
-  <p class="statline">Todo lo que el ranking sabe de vos vive acá — se escribe en <b>profile.toml</b>,
-     así que la terminal y el navegador siempre leen lo mismo.</p>
+  <p class="statline">Cuatro pasos y listo. Lo fino vive plegado en ajustes avanzados,
+     con valores que ya funcionan.</p>
 </header>
 {error_block}
 <form method="post" action="/perfil" class="form-grid">
   <section class="panel">
-    <h2>Quién sos</h2>
-    {_textarea("summary", "Resumen para la capa semántica", identity.get("summary", "").strip(), rows=6,
-               hint="Contalo como se lo contarías a otro dev, en prosa — no como lista de keywords. Cada aviso se compara contra esto (y contra tu CV, si lo cargás).")}
+    <h2>1 · Quién sos</h2>
+    {_textarea("summary", "Contá qué hacés, en tus palabras", identity.get("summary", "").strip(), rows=5,
+               hint="Como se lo contarías a otro dev. Cada aviso se compara contra este texto (y contra tu CV, si lo cargás).")}
   </section>
   <section class="panel">
-    <h2>Qué barrer</h2>
-    {_textarea("queries", "Términos de búsqueda, uno por línea", "\n".join(search.get("queries", [])), rows=8,
-               hint="La API no devuelve nada sin query, y ningún término solo cubre el tablero: cada línea es un ángulo y los resultados se unen.")}
-    <div class="cols-3">
-      <div class="field"><label for="p-category">Categoría de la búsqueda</label>
-        <input type="text" id="p-category" name="category" value="{e(search.get("category", "programming"))}"></div>
-      {_number("max_pages", "Páginas por búsqueda", search.get("max_pages_per_query", 3), step="1")}
-      <div class="field check" style="align-self:end">
-        <input type="checkbox" id="p-remote" name="remote_only" value="1"{" checked" if search.get("remote_only", True) else ""}>
-        <label for="p-remote">Solo remotas</label></div>
-    </div>
+    <h2>2 · Tu stack</h2>
+    {_chipfield("stack", "Tecnologías que sumen puntos", stack_lines, starred=True, rows=8,
+                hint="Escribí una y Enter. La ★ marca las claves — valen el doble.")}
   </section>
   <section class="panel">
-    <h2>Tu stack — lo que suma puntos</h2>
-    {_textarea("stack", "Un término por línea: término = peso", stack_text, rows=12,
-               hint="El peso dice cuánto vale que aparezca. Se cuenta una vez por término, no por repetición. Sin peso, vale 2.")}
+    <h2>3 · Lo que no querés ni ver</h2>
+    {_chipfield("exclude_in_title", "Tecnologías vetadas", filters.get("exclude_in_title", []), rows=5,
+                hint="Si aparecen en el título del aviso, se descarta solo.")}
   </section>
   <section class="panel">
-    <h2>Descartes — lo que ni se lee</h2>
-    {_textarea("exclude_in_title", "Tecnologías vetadas en el título, una por línea",
-               "\n".join(filters.get("exclude_in_title", [])), rows=5,
-               hint="En el título es el eje del puesto: descarta. En el cuerpo solo penaliza — esa lista va abajo.")}
-    {_textarea("penalize_in_body", "Penalizar si aparecen en el cuerpo",
-               "\n".join(filters.get("penalize_in_body", [])), rows=3)}
-    {_textarea("allowed_categories", "Categorías del aviso aceptadas",
-               "\n".join(filters.get("allowed_categories", [])), rows=4,
-               hint="La categoría que el aviso trae, no la de la búsqueda — la API devuelve marketing aunque busques programming. Nombres exactos de /api/v0/categories.")}
-    <div class="field"><label for="p-langs">Idiomas excluidos (separados por coma)</label>
-      <input type="text" id="p-langs" name="exclude_langs" value="{e(", ".join(filters.get("exclude_langs", [])))}">
-      <p class="hint">Avisos que exigen postular en un idioma que no manejás.</p></div>
-    <div class="field"><span class="label">Banderas de calidad de Get on Board que descartan</span>
-      <div class="checks">{flag_checks}</div></div>
-  </section>
-  <section class="panel">
-    <h2>Pesos del puntaje</h2>
-    <div class="cols-3">
-      {_number("weight_stack", "Stack", scoring.get("weight_stack", 14.0))}
-      {_number("weight_semantic", "Semántica", scoring.get("weight_semantic", 12.0))}
-      {_number("weight_competition", "Competencia", scoring.get("weight_competition", 8.0))}
-      {_number("weight_freshness", "Frescura", scoring.get("weight_freshness", 5.0))}
-      {_number("weight_salary", "Sueldo", scoring.get("weight_salary", 3.0))}
-      {_number("weight_seniority", "Seniority", scoring.get("weight_seniority", 4.0))}
-    </div>
-    <div class="cols-3">
-      {_number("stack_half_point", "Saturación del stack", scoring.get("stack_half_point", 12.0))}
-      {_number("good_applications_count", "Postulaciones aceptables", scoring.get("good_applications_count", 100), step="10")}
-      {_number("stale_after_days", "Vieja a los (días)", scoring.get("stale_after_days", 45.0), step="5")}
-    </div>
-    {_number("target_salary_usd", "Sueldo objetivo (USD/mes)", scoring.get("target_salary_usd", 0), step="100")}
-    <p class="hint">Si un aviso que te gusta queda abajo de uno que no, el problema está acá — corré el radar y mirá el desglose de cada aviso.</p>
-  </section>
-  <section class="panel">
-    <h2>Seniority</h2>
-    <div class="field"><span class="label">Niveles que te calzan (puntaje completo)</span>
+    <h2>4 · Qué te importa más</h2>
+    <div class="field"><span class="label">Elegí un modo de ranking</span>
+      <div class="presets">{preset_cards}</div></div>
+    {_number("target_salary_usd", "Sueldo al que apuntás (USD/mes)", scoring.get("target_salary_usd", 0), step="100")}
+    <div class="field"><span class="label">Tu nivel — puntaje completo</span>
       <div class="checks">{seniority_checks("seniority_fit", seniority.get("fit", []))}</div></div>
-    <div class="field"><span class="label">Niveles a los que aspirás (puntaje parcial)</span>
+    <div class="field"><span class="label">Niveles a los que aspirás — puntaje parcial</span>
       <div class="checks">{seniority_checks("seniority_reach", seniority.get("reach", []))}</div></div>
   </section>
+
+  <details class="adv">
+    <summary>Ajustes avanzados — no hace falta tocarlos</summary>
+    <section class="panel">
+      <h2>Búsqueda</h2>
+      {_chipfield("queries", "Términos con los que se barre Get on Board", search.get("queries", []), rows=8,
+                  hint="Cada uno es un ángulo de búsqueda; los resultados se unen. Sin al menos uno, la API no devuelve nada.")}
+      <div class="cols-3">
+        <div class="field"><label for="p-category">Categoría de la búsqueda</label>
+          <input type="text" id="p-category" name="category" value="{e(search.get("category", "programming"))}"></div>
+        {_number("max_pages", "Páginas por búsqueda", search.get("max_pages_per_query", 3), step="1")}
+        <div class="field check" style="align-self:end">
+          <input type="checkbox" id="p-remote" name="remote_only" value="1"{" checked" if search.get("remote_only", True) else ""}>
+          <label for="p-remote">Solo remotas</label></div>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Filtros finos</h2>
+      {_chipfield("penalize_in_body", "Restan puntos si aparecen en el cuerpo", filters.get("penalize_in_body", []), rows=3,
+                  hint="No descartan: un aviso puede nombrar Java en los deseables y seguir siendo bueno.")}
+      {_chipfield("allowed_categories", "Categorías de aviso aceptadas", filters.get("allowed_categories", []), rows=3,
+                  hint="Nombres exactos de /api/v0/categories.")}
+      <div class="field"><label for="p-langs">Idiomas excluidos (separados por coma)</label>
+        <input type="text" id="p-langs" name="exclude_langs" value="{e(", ".join(filters.get("exclude_langs", [])))}"></div>
+      <div class="field"><span class="label">Banderas de calidad de Get on Board que descartan</span>
+        <div class="checks">{flag_checks}</div></div>
+    </section>
+    <section class="panel">
+      <h2>Pesos a mano</h2>
+      <p class="hint">Solo cuentan si elegiste «Personalizado» arriba.</p>
+      <div class="cols-3">
+        {_number("weight_stack", "Stack", scoring.get("weight_stack", 14.0))}
+        {_number("weight_semantic", "Semántica", scoring.get("weight_semantic", 12.0))}
+        {_number("weight_competition", "Competencia", scoring.get("weight_competition", 8.0))}
+        {_number("weight_freshness", "Frescura", scoring.get("weight_freshness", 5.0))}
+        {_number("weight_salary", "Sueldo", scoring.get("weight_salary", 3.0))}
+        {_number("weight_seniority", "Seniority", scoring.get("weight_seniority", 4.0))}
+      </div>
+      <div class="cols-3">
+        {_number("stack_half_point", "Saturación del stack", scoring.get("stack_half_point", 12.0))}
+        {_number("good_applications_count", "Postulaciones aceptables", scoring.get("good_applications_count", 100), step="10")}
+        {_number("stale_after_days", "Vieja a los (días)", scoring.get("stale_after_days", 45.0), step="5")}
+      </div>
+    </section>
+  </details>
+
   <div class="savebar">
     <button type="submit">Guardar perfil</button>
     {saved_note}
   </div>
-</form>"""
+</form>
+<script>{CHIPS_JS}</script>"""
     return shell("Perfil", body, active="/perfil", last_sweep=last_sweep)
 
 
