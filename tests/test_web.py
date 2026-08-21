@@ -615,6 +615,55 @@ def test_progress_does_not_report_a_scan_that_never_ran_as_finished():
     check("and does not claim to be done", "Ver los resultados" not in html)
 
 
+def test_the_sweep_log_parses_back_into_numbers():
+    # The page draws structure parsed from the same human lines the terminal
+    # shows. A format drift between scan.run and this parser fails quietly —
+    # chips stop lighting — so the contract is locked here.
+    lines = [
+        "Barriendo Get on Board…",
+        "  python                   +35",
+        "  ingeniero de software    +4",
+        "  nestjs                   +0",
+        "  rag                      +2 [500 on x]",
+        "173 avisos únicos",
+        "64 pasan el filtro, 109 descartados",
+        "Ollama no disponible — solo keywords",
+        "  embebidos 25/64",
+        "  embebidos 50/64",
+    ]
+    p = web.parse_progress(lines)
+    check("queries with spaces parse whole", ("ingeniero de software", 4, None) in p["queries"])
+    check("a zero-hit angle still lands", ("nestjs", 0, None) in p["queries"])
+    check("an angle error is captured", ("rag", 2, "500 on x") in p["queries"])
+    check("unique count lands", p["unique"] == 173)
+    check("filter counts land", (p["kept"], p["dropped"]) == (64, 109))
+    check("only the last embed line wins", p["embedded"] == (50, 64))
+    check("keywords-only is detected", p["keywords_only"] is True)
+
+
+def test_the_progress_page_shows_pending_angles_dimmed():
+    # Knowing the plan up front is the difference between "how much is left"
+    # and "something is happening": swept angles light, pending ones wait.
+    state = web.ScanState()
+    started = threading.Event()
+    release = threading.Event()
+
+    def work(say):
+        say("  python                   +35")
+        started.set()
+        release.wait(2)
+
+    state.start(work, queries=["python", "backend", "rag"])
+    started.wait(2)
+    page = web.render_progress(state).decode()
+    release.set()
+    check("the swept angle lights with its count", 'class="chip angle hit">python <b>+35</b>' in page)
+    check("pending angles render dimmed", page.count('chip angle wait') == 2)
+    check("the sweep phase is the active link", 'chain-link act' in page)
+    check("results wait honestly", "al terminar, acá" in page)
+    check("the raw log is still there to audit", "El log crudo" in page)
+
+
 def test_a_failed_scan_reports_on_the_page_instead_of_vanishing():
     state = web.ScanState()
     done = threading.Event()

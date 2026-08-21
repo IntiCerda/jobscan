@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import threading
 import traceback
 import urllib.parse
@@ -720,7 +721,32 @@ details.adv[open] > .panel { animation: reveal 220ms cubic-bezier(0.23, 1, 0.32,
 #cv-cov .chip.key.miss { border-color: var(--amber); color: var(--amber); }
 #cv-cov .chip.key.hit { border-color: transparent; }
 
-@media (max-width: 1100px) { .cv-grid { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .cv-grid, .prog-grid { grid-template-columns: 1fr; } }
+
+/* -- progress page ------------------------------------------------------ */
+
+.prog-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 18px; align-items: start; margin-bottom: 20px; }
+.prog-grid .panel { margin: 0; }
+.chip.angle { font-variant-numeric: tabular-nums; transition: color 250ms ease-out, background 250ms ease-out, border-color 250ms ease-out; }
+.chip.angle b { font-weight: 700; margin-left: 5px; }
+.chip.angle.wait { opacity: 0.4; }
+.chip.angle.hit { color: var(--signal); background: var(--signal-soft); border-color: transparent; }
+.chip.angle.zero { color: var(--ink-3); }
+.chip.angle.warn { color: var(--amber); background: var(--amber-bg); border-color: transparent; }
+.chain-link.act i {
+  background: var(--signal); border-color: var(--signal);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.chain-link.act b { color: var(--signal); }
+.chain-link.wait { opacity: 0.55; }
+.ebar {
+  height: 6px; border-radius: 3px; background: var(--surface-2);
+  border: 1px solid var(--line-2); margin-top: 16px; overflow: hidden;
+}
+.ebar i {
+  display: block; height: 100%; background: var(--signal); border-radius: 3px;
+  transition: width 600ms cubic-bezier(0.23, 1, 0.32, 1);
+}
 
 /* -- progress & drops --------------------------------------------------- */
 
@@ -1090,31 +1116,168 @@ def render_detail(result: scan.Result | None, job_id: str) -> tuple[int, bytes]:
 # --------------------------------------------------------------------------
 
 
-def render_progress(state: "ScanState") -> bytes:
+_SWEEP_LINE = re.compile(r"^  (.+?)\s+\+(\d+)(?:\s+\[(.+)\])?$")
+_EMBED_LINE = re.compile(r"^  embebidos (\d+)/(\d+)$")
+_UNIQUE_LINE = re.compile(r"^(\d+) avisos únicos$")
+_FILTER_LINE = re.compile(r"^(\d+) pasan el filtro, (\d+) descartados$")
+
+
+def parse_progress(lines: list[str]) -> dict:
+    """The sweep log, read back into structure.
+
+    The pipeline reports progress as human lines so the terminal and the web
+    share one wording; this turns those same lines into numbers the page can
+    draw. Parsing the log instead of threading a second channel through
+    scan.run keeps the pipeline ignorant of how progress is displayed.
+    """
+    out: dict = {
+        "queries": [],       # (term, hits, error | None)
+        "unique": None,
+        "kept": None,
+        "dropped": None,
+        "embedded": None,    # (done, total)
+        "keywords_only": False,
+    }
+    for line in lines:
+        if m := _EMBED_LINE.match(line):
+            out["embedded"] = (int(m.group(1)), int(m.group(2)))
+        elif m := _SWEEP_LINE.match(line):
+            out["queries"].append((m.group(1), int(m.group(2)), m.group(3)))
+        elif m := _UNIQUE_LINE.match(line):
+            out["unique"] = int(m.group(1))
+        elif m := _FILTER_LINE.match(line):
+            out["kept"], out["dropped"] = int(m.group(1)), int(m.group(2))
+        elif "solo keywords" in line:
+            out["keywords_only"] = True
+    return out
+
+
+def render_progress(state: "ScanState", *, last_sweep: str | None = None) -> bytes:
     lines = state.snapshot()
-    log = "\n".join(lines) or "Arrancando…"
+
+    if not state.running and not lines:
+        # Reachable by typing the URL. Saying "listo" here would report a scan
+        # that never happened as one that finished.
+        body = """<header class="page-head"><h1>Barriendo Get on Board</h1>
+  <p class="statline">No hay ningún barrido corriendo.</p></header>
+<div class="empty"><p>Nada que mostrar todavía.</p>
+  <p><a href="/">Volver al radar</a></p></div>"""
+        return shell("Barriendo", body, active="/", last_sweep=last_sweep)
+
+    p = parse_progress(lines)
+    failed = bool(state.error) and not state.running
+    done = not state.running and not failed
+
+    # -- the four phases as a chain, like the CV's semantic chain ----------
+    sweep_done = p["unique"] is not None
+    embed_state = (
+        "skip" if p["keywords_only"]
+        else "done" if done or (p["embedded"] and p["embedded"][0] >= p["embedded"][1])
+        else "act" if p["embedded"]
+        else "wait"
+    )
+
+    def link(status: str, name: str, detail: str) -> str:
+        return (
+            f'<li class="chain-link {status}"><i></i><div><b>{e(name)}</b>'
+            f"<span>{e(detail)}</span></div></li>"
+        )
+
+    swept_n = len(p["queries"])
+    total_q = len(state.queries) or swept_n or None
+    chain = '<ol class="chain">'
+    chain += link(
+        "on" if sweep_done else "act",
+        "Barrido",
+        f"{p['unique']} avisos únicos" if sweep_done
+        else f"ángulo {swept_n}" + (f" de {total_q}" if total_q else "") + "…",
+    )
+    chain += link(
+        "on" if p["kept"] is not None else "wait",
+        "Filtro",
+        f"{p['kept']} pasan · {p['dropped']} descartados"
+        if p["kept"] is not None else "espera al barrido",
+    )
+    chain += link(
+        {"done": "on", "act": "act", "skip": "off", "wait": "wait"}[embed_state],
+        "Embeddings",
+        "apagados — solo keywords" if embed_state == "skip"
+        else "completos" if done and p["embedded"]
+        else f"{p['embedded'][0]} de {p['embedded'][1]}" if p["embedded"]
+        else "espera al filtro",
+    )
+    if failed:
+        chain += link("off", "Resultados", "el barrido se cortó antes de llegar")
+    else:
+        chain += link("on" if done else "wait", "Resultados",
+                      "listos en el radar" if done else "al terminar, acá")
+    chain += "</ol>"
+
+    # -- the sweep itself: every query angle, lighting up as it lands ------
+    seen = {name: (hits, err) for name, hits, err in p["queries"]}
+    angle_chips = []
+    for q in (state.queries or [name for name, _, _ in p["queries"]]):
+        if q in seen:
+            hits, err = seen[q]
+            if err:
+                angle_chips.append(
+                    f'<span class="chip angle warn" title="{e(err)}">{e(q)} <b>!</b></span>')
+            elif hits:
+                angle_chips.append(f'<span class="chip angle hit">{e(q)} <b>+{hits}</b></span>')
+            else:
+                angle_chips.append(f'<span class="chip angle zero">{e(q)} <b>+0</b></span>')
+        else:
+            angle_chips.append(f'<span class="chip angle wait">{e(q)}</span>')
+    angles = f'<p class="chips">{"".join(angle_chips)}</p>' if angle_chips else ""
+
+    # -- embeddings progress bar -------------------------------------------
+    embed_bar = ""
+    if p["embedded"] and embed_state in ("act", "done"):
+        done_n, total_n = p["embedded"]
+        if done:
+            done_n = total_n
+        pct = 0 if total_n <= 0 else round(min(done_n, total_n) / total_n * 100)
+        embed_bar = f"""<div class="ebar" role="progressbar" aria-valuenow="{done_n}"
+  aria-valuemin="0" aria-valuemax="{total_n}" aria-label="Avisos embebidos">
+  <i style="width:{pct}%"></i></div>"""
+
     if state.running:
         note = '<p class="statline">Esta página se actualiza sola cada 2 segundos.</p>'
         tail = ""
-    elif not lines:
-        # Reachable by typing the URL. Saying "listo" here would report a scan
-        # that never happened as one that finished.
-        note = '<p class="statline">No hay ningún barrido corriendo.</p>'
+    elif failed:
+        note = '<p class="statline"><b>El barrido falló.</b> El detalle está en el log.</p>'
         tail = '<p><a href="/">Volver al radar</a></p>'
-        log = "Nada que mostrar todavía."
-    elif state.error:
-        note = '<p class="statline"><b>El barrido falló.</b></p>'
-        tail = '<p><a href="/">Volver al radar</a></p>'
-        log = f"{log}\n\n{state.error}"
     else:
         note = '<p class="statline">Listo.</p>'
         tail = '<p class="apply"><a class="btn" href="/">Ver los resultados</a></p>'
+
+    log = "\n".join(lines)
+    if failed:
+        log = f"{log}\n\n{state.error}"
+    raw = f"""<details class="drops"{" open" if failed else ""}>
+  <summary>El log crudo, línea por línea</summary>
+  <pre class="log" role="log" aria-label="Progreso del barrido">{e(log)}</pre>
+</details>"""
+
     body = f"""<header class="page-head"><h1>Barriendo Get on Board</h1>{note}</header>
-<pre class="log" role="log" aria-label="Progreso del barrido">{e(log)}</pre>
-{tail}"""
+<div class="prog-grid">
+  <section class="panel">
+    <h2>Ángulos de búsqueda</h2>
+    {angles or '<p class="none">Arrancando…</p>'}
+    {embed_bar}
+  </section>
+  <aside>
+    <section class="panel">
+      <h2>Fases</h2>
+      {chain}
+    </section>
+  </aside>
+</div>
+{tail}
+{raw}"""
     return shell(
         "Barriendo", body, active="/", running=state.running,
-        refresh=2 if state.running else 0,
+        last_sweep=last_sweep, refresh=2 if state.running else 0,
     )
 
 
@@ -1648,15 +1811,23 @@ class ScanState:
         self.lock = threading.Lock()
         self.running = False
         self.error: str | None = None
+        self.queries: list[str] = []
         self._lines: list[str] = []
 
-    def start(self, work) -> bool:
-        """True if this call started the scan, False if one was already running."""
+    def start(self, work, queries: list[str] | None = None) -> bool:
+        """True if this call started the scan, False if one was already running.
+
+        `queries` is the sweep plan: knowing every angle up front lets the
+        progress page show the pending ones dimmed instead of a list that
+        only grows, which is the difference between "how much is left" and
+        "something is happening".
+        """
         with self.lock:
             if self.running:
                 return False
             self.running = True
             self.error = None
+            self.queries = list(queries or [])
             self._lines = []
         threading.Thread(target=self._run, args=(work,), daemon=True).start()
         return True
@@ -1736,7 +1907,10 @@ def make_handler(*, profile_path: Path, db: Path, no_semantic: bool):
                 if path == "/":
                     self._send(200, render_index(scan.last(db), params, state.running))
                 elif path == "/progreso":
-                    self._send(200, render_progress(state))
+                    last = scan.last(db)
+                    self._send(200, render_progress(
+                        state, last_sweep=fmt_when(last.finished_at) if last else None,
+                    ))
                 elif path == "/perfil":
                     profile = scan.load_profile(profile_path)
                     last = scan.last(db)
@@ -1787,7 +1961,8 @@ def make_handler(*, profile_path: Path, db: Path, no_semantic: bool):
                         lambda say: scan.run(
                             profile=profile, db=db, cv=cv,
                             no_semantic=no_semantic, on_progress=say,
-                        )
+                        ),
+                        queries=profile.get("search", {}).get("queries", []),
                     )
                     self._redirect("/progreso")
                 elif path == "/perfil":
