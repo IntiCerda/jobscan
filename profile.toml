@@ -100,6 +100,11 @@ embedding = 3.5
 pgvector = 4.0
 ollama = 4.0
 "agentes de ia" = 3.5
+# Azure OpenAI en AustranetGRC: agente RAG sobre controles ISO/NIST. Es un
+# servicio gestionado de IA, no infraestructura Azure — no vale para un rol
+# de SRE que pide IAM y AKS, sí para uno que pide integrar modelos en la nube.
+"azure openai" = 3.0
+mcp = 2.0
 prometheus = 1.5
 grafana = 1.5
 pytest = 1.5
