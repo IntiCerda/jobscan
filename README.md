@@ -29,7 +29,10 @@ the whole thing:
 
 - **Radar** — the ranked list, folded into score bands you can collapse,
   filterable by title or stack term, floor score, freshness or how crowded a
-  posting already is. Every posting opens into its score breakdown.
+  posting already is. Every posting opens into its score breakdown. Mark one
+  as **postulé**, **guardada** or **descartada** and it leaves the pending
+  queue: the marks live beside the runs, so a decision made today survives
+  tomorrow's sweep and the list shrinks as you work through it.
 - **Perfil** — everything in `profile.toml`, editable from a form: your
   summary, the query sweep, stack terms and weights, vetoes, scoring weights,
   seniority. It writes the same file the CLI reads, keeps a `.bak` of the

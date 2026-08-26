@@ -217,6 +217,24 @@ def last(db: Path) -> Result | None:
     return Result.from_dict(data) if data else None
 
 
+# The three answers a posting can get. Anything else is not a state the rest of
+# the program knows how to render, so it never reaches the database.
+MARK_STATES = ("applied", "saved", "discarded")
+
+
+def marks(db: Path) -> dict[str, str]:
+    """What the reader has already decided, by posting id."""
+    with Store(db) as store:
+        return store.marks()
+
+
+def mark(db: Path, job_id: str, state: str) -> None:
+    """Record one decision. An unknown state clears the mark rather than storing it."""
+    with Store(db) as store:
+        store.mark(job_id, state if state in MARK_STATES else "")
+        store.commit()
+
+
 def _seniority_names() -> dict[str, str]:
     try:
         return api.lookup("seniorities")

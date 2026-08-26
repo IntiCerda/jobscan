@@ -43,6 +43,30 @@ SORTS = {
     "quiet": ("menos postulaciones", lambda r: r["applications"]),
 }
 
+# The three answers a posting can get: the chip it wears once answered, and the
+# button that answers it. A radar that keeps showing what you already decided is
+# a radar you stop reading, so the list has to be able to shrink.
+STATES = {
+    "applied": ("postulé", "✓ postulé"),
+    "saved": ("guardada", "★ guardar"),
+    "discarded": ("descartada", "✕ descartar"),
+}
+
+# Marks that take a posting out of the pending queue. Saving is not one of them:
+# saving says "this one, later", which is still something to come back to.
+ANSWERED = ("applied", "discarded")
+
+# The views, in the order they are offered. Pending is the default because it is
+# the only one that is a to-do list — and it is a tab, always visible and always
+# counted, so a default that narrows never narrows silently.
+STATE_VIEWS = (
+    ("", "pendientes"),
+    ("saved", "guardadas"),
+    ("applied", "postulé"),
+    ("discarded", "descartadas"),
+    ("all", "todas"),
+)
+
 PART_LABELS = {
     "stack": "Stack",
     "semantic": "Semántica",
@@ -205,13 +229,37 @@ def fmt_when(iso: str) -> str:
 # --------------------------------------------------------------------------
 
 
-def apply_filters(rows: list[dict], params: dict) -> list[dict]:
+def _url(params: dict, **over) -> str:
+    """The radar URL with some parameters replaced; empty values drop out.
+
+    Every link and every mark carries the current filters forward, so acting on
+    a posting from a narrowed view does not throw that view away.
+    """
+    merged = {**params, **over}
+    query = urllib.parse.urlencode(
+        {k: v for k, v in merged.items() if v not in ("", None)}
+    )
+    return f"/?{query}" if query else "/"
+
+
+def apply_filters(rows: list[dict], params: dict, marks: dict | None = None) -> list[dict]:
     """Narrow and order the ranked rows from the query string.
 
     Every filter is optional and absent means "do not narrow", so a bookmarked
     or hand-edited URL degrades to the full list rather than to an empty page.
+
+    `marks` is what the reader already decided. With none recorded the default
+    view holds everything, so the radar of someone who has never marked a
+    posting looks exactly as it did before there was anything to mark.
     """
     out = list(rows)
+    marks = marks or {}
+
+    view = params.get("state") or ""
+    if view in STATES:
+        out = [r for r in out if marks.get(r["id"]) == view]
+    elif view != "all":
+        out = [r for r in out if marks.get(r["id"]) not in ANSWERED]
 
     query = (params.get("q") or "").strip().lower()
     if query:
@@ -420,6 +468,24 @@ input::placeholder, textarea::placeholder { color: var(--ink-3); }
 .btn.ghost:hover { color: var(--ink); border-color: var(--ink-3); filter: none; }
 .showing { font-size: 13px; color: var(--ink-3); margin: 12px 2px 24px; }
 
+/* the views — which slice of the queue is on screen, with its size */
+.views { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 14px; }
+.view {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--ink-3); text-decoration: none;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 7px 12px; border-radius: 7px; border: 1px solid transparent;
+  transition: color 120ms ease-out, background 120ms ease-out;
+}
+.view:hover { color: var(--ink); background: var(--line-2); }
+.view .count { font-weight: 500; font-variant-numeric: tabular-nums; }
+.view[aria-current="page"] {
+  color: var(--ink); background: var(--surface);
+  border-color: var(--line); box-shadow: var(--lift);
+}
+.view[aria-current="page"] .count { color: var(--signal); }
+
 details.grp { margin: 0 0 22px; }
 details.grp > summary {
   list-style: none; cursor: pointer; user-select: none;
@@ -514,6 +580,34 @@ li.job:last-child { border-radius: 0 0 10px 10px; }
 .bars i.on { background: var(--signal); }
 li.job .meta { font-size: 12.5px; color: var(--ink-3); margin: 5px 0 0; font-variant-numeric: tabular-nums; }
 li.job .meta b { color: var(--ink-2); font-weight: 500; }
+
+/* what you decided — a quiet tag, and the row's title steps back once the
+   posting is out of the queue. Never the accent: green is reserved for signal,
+   and "already answered" is the opposite of something to look at. */
+.state {
+  display: inline-block; margin-left: 8px; vertical-align: 1px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.05em;
+  padding: 2.5px 8px; border-radius: 4px;
+  color: var(--ink-2); background: var(--surface-2); border: 1px solid var(--line-2);
+}
+li.job.st-discarded .job-main h2 a, li.job.st-applied .job-main h2 a { color: var(--ink-2); }
+
+.marks { display: flex; gap: 4px; justify-content: flex-end; margin: 9px 0 0; }
+.marks button {
+  font-family: inherit; font-size: 12px; font-weight: 500;
+  color: var(--ink-3); background: transparent;
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 9px;
+  cursor: pointer;
+  transition: color 120ms ease-out, border-color 120ms ease-out, background 120ms ease-out;
+}
+.marks button:hover { color: var(--ink); border-color: var(--ink-3); filter: none; }
+.marks button.on {
+  color: var(--ink); background: var(--surface-2); border-color: var(--ink-3);
+}
+.mark-bar { display: flex; align-items: center; gap: 14px; margin: -18px 0 34px; }
+.mark-bar .hint { margin: 0; }
+.mark-bar .marks { margin: 0; }
 
 .empty {
   border: 1px dashed var(--line); border-radius: 10px;
@@ -858,7 +952,35 @@ def _options(choices: list[tuple[str, str]], current: str) -> str:
     )
 
 
-def render_filters(params: dict, total: int, showing: int) -> str:
+def render_state_tabs(params: dict, pool: list[dict], marks: dict) -> str:
+    """The views, each carrying its count.
+
+    The count is what makes the default safe: "pendientes 48 · descartadas 15"
+    says out loud that fifteen rows are not on screen, and one click shows them.
+    """
+    counts = {
+        "": sum(1 for r in pool if marks.get(r["id"]) not in ANSWERED),
+        "all": len(pool),
+    }
+    for key in STATES:
+        counts[key] = sum(1 for r in pool if marks.get(r["id"]) == key)
+
+    current = params.get("state") or ""
+    if current not in counts:
+        current = ""
+    return (
+        '<nav class="views" aria-label="Estado de las vacantes">'
+        + "".join(
+            f'<a class="view" href="{e(_url(params, state=key))}"'
+            + (' aria-current="page"' if key == current else "")
+            + f'>{e(label)} <span class="count">{counts[key]}</span></a>'
+            for key, label in STATE_VIEWS
+        )
+        + "</nav>"
+    )
+
+
+def render_filters(params: dict, total: int, showing: int, hidden: int = 0) -> str:
     current = params.get("sort") or "score"
     sort_options = _options([(k, label) for k, (label, _) in SORTS.items()], current)
     axis, sub = group_axes(params)
@@ -901,11 +1023,45 @@ def render_filters(params: dict, total: int, showing: int) -> str:
     <button type="submit">Aplicar filtros</button>
   </div>
 </form>
-<p class="showing" role="status">Mostrando {showing} de {total} vacantes que pasaron el filtro.</p>
+<p class="showing" role="status">Mostrando {showing} de {total} vacantes que pasaron el filtro.{
+    f" {hidden} están fuera de esta vista por su estado." if hidden else ""}</p>
 """
 
 
-def render_job_card(row: dict, top: float, seniority: dict, rank: int = 0) -> str:
+def _mark_form(job_id: str, state: str, back: str) -> str:
+    """The three answers, as one form of toggle buttons.
+
+    Pressing the state a posting already has clears it, so undo needs no fourth
+    button and no state kept in the page. A plain form because this has to work
+    the same whether or not any script ran.
+    """
+    buttons = "".join(
+        f'<button type="submit" name="state" value="{key}" '
+        + (
+            'class="on" aria-pressed="true"'
+            if state == key
+            else 'aria-pressed="false"'
+        )
+        + f">{e(label)}</button>"
+        for key, (_, label) in STATES.items()
+    )
+    return (
+        '<form class="marks" method="post" action="/marcar">'
+        f'<input type="hidden" name="id" value="{e(job_id)}">'
+        f'<input type="hidden" name="back" value="{e(back)}">'
+        f"{buttons}</form>"
+    )
+
+
+def render_job_card(
+    row: dict,
+    top: float,
+    seniority: dict,
+    rank: int = 0,
+    *,
+    state: str = "",
+    back: str = "/",
+) -> str:
     level = seniority.get(str(row.get("seniority_id")), "sin nivel")
     # Bars are relative to the best posting of this run — the maximum possible
     # total moves with the weights in profile.toml, so an absolute meter would
@@ -922,29 +1078,56 @@ def render_job_card(row: dict, top: float, seniority: dict, rank: int = 0) -> st
         hit = "".join(f'<span class="chip hit">{_icon(t)}{e(t)}</span>' for t in row.get("matched", []))
         warn = "".join(f'<span class="chip warn">{e(t)}</span>' for t in row.get("penalized", []))
         chips = f'<p class="chips">{hit}{warn}</p>'
-    return f"""<li class="job">
+    tag = (
+        f'<span class="state">{e(STATES[state][0])}</span>' if state in STATES else ""
+    )
+    return f"""<li class="job{f" st-{state}" if state in STATES else ""}">
   <span class="rank" aria-hidden="true">{rank:02d}</span>
   <div class="job-main">
-    <h2><a href="/aviso/{e(urllib.parse.quote(row["id"]))}">{e(row["title"])}</a>{badge}</h2>
+    <h2><a href="/aviso/{e(urllib.parse.quote(row["id"]))}">{e(row["title"])}</a>{badge}{tag}</h2>
     {chips}
   </div>
   <div class="job-data">
     <div class="signal-row"><span class="score{strong}">{row["score"]:.1f}</span>
       <span class="bars" aria-hidden="true">{bars}</span></div>
     <p class="meta"><b>{e(level)}</b> · {e(fmt_salary(row))} · {row["applications"]} post. · {e(fmt_age(row["published_at"]))}</p>
+    {_mark_form(row["id"], state, back)}
   </div>
 </li>"""
 
 
-def render_cards(rows: list[dict], top: float, names: dict, ranks: dict) -> str:
+def render_cards(
+    rows: list[dict],
+    top: float,
+    names: dict,
+    ranks: dict,
+    *,
+    marks: dict | None = None,
+    back: str = "/",
+) -> str:
+    marks = marks or {}
     return (
         '<ol class="jobs">'
-        + "".join(render_job_card(r, top, names, ranks.get(r["id"], 0)) for r in rows)
+        + "".join(
+            render_job_card(
+                r, top, names, ranks.get(r["id"], 0),
+                state=marks.get(r["id"], ""), back=back,
+            )
+            for r in rows
+        )
         + "</ol>"
     )
 
 
-def render_listing(rows: list[dict], params: dict, top: float, names: dict) -> str:
+def render_listing(
+    rows: list[dict],
+    params: dict,
+    top: float,
+    names: dict,
+    *,
+    marks: dict | None = None,
+    back: str = "/",
+) -> str:
     """The ranked rows, optionally folded into collapsible groups.
 
     Groups are plain `<details>`: a native disclosure widget every screen
@@ -953,9 +1136,11 @@ def render_listing(rows: list[dict], params: dict, top: float, names: dict) -> s
     so folding a group never hides how much it holds.
     """
     if not rows:
+        # The escape hatch clears the state view too: once everything pending is
+        # answered, a link back to the default view lands on this same page.
         return (
             '<div class="empty"><h2>Ninguna vacante coincide con ese filtro</h2>'
-            '<p><a href="/">Ver todas</a></p></div>'
+            '<p><a href="/?state=all">Ver todas, incluidas las que ya respondiste</a></p></div>'
         )
 
     # Rank is the position in the overall ranking, not in the filtered view:
@@ -966,7 +1151,7 @@ def render_listing(rows: list[dict], params: dict, top: float, names: dict) -> s
     axis, sub = group_axes(params)
     groups = group_rows(rows, axis, names)
     if groups is None:
-        return render_cards(rows, top, names, ranks)
+        return render_cards(rows, top, names, ranks, marks=marks, back=back)
 
     out, opened = [], 0
     for label, items in groups:
@@ -979,12 +1164,12 @@ def render_listing(rows: list[dict], params: dict, top: float, names: dict) -> s
         is_open = opened == 0 or opened + len(items) <= OPEN_UNTIL
         opened += len(items)
 
-        inner = render_cards(items, top, names, ranks)
+        inner = render_cards(items, top, names, ranks, marks=marks, back=back)
         if sub:
             inner = "".join(
                 f'<details class="sub" open><summary>{e(sub_label)} '
                 f'<span class="count">({len(sub_items)})</span></summary>'
-                f"{render_cards(sub_items, top, names, ranks)}</details>"
+                f"{render_cards(sub_items, top, names, ranks, marks=marks, back=back)}</details>"
                 for sub_label, sub_items in (group_rows(items, sub, names) or [])
             )
         out.append(
@@ -995,7 +1180,13 @@ def render_listing(rows: list[dict], params: dict, top: float, names: dict) -> s
     return "".join(out)
 
 
-def render_index(result: scan.Result | None, params: dict, running: bool) -> bytes:
+def render_index(
+    result: scan.Result | None,
+    params: dict,
+    running: bool,
+    marks: dict | None = None,
+) -> bytes:
+    marks = marks or {}
     if result is None:
         body = """<header class="page-head"><h1>Radar</h1></header>
 <div class="empty">
@@ -1010,9 +1201,16 @@ def render_index(result: scan.Result | None, params: dict, running: bool) -> byt
 </div>"""
         return shell("Radar", body, active="/", running=running)
 
-    rows = apply_filters(result.jobs, params)
+    # The pool is everything the other filters keep, whatever its state: the
+    # tabs count against it so switching views never changes the search you are
+    # inside, and "how many did I hide" is measured against the same list.
+    pool = apply_filters(result.jobs, {**params, "state": "all"}, marks)
+    rows = apply_filters(result.jobs, params, marks)
+    back = _url(params)
     top = max((r["score"] for r in result.jobs), default=0.0)
-    listing = render_listing(rows, params, top, result.seniority_names)
+    listing = render_listing(
+        rows, params, top, result.seniority_names, marks=marks, back=back
+    )
 
     dropped = ""
     if result.dropped:
@@ -1036,14 +1234,19 @@ def render_index(result: scan.Result | None, params: dict, running: bool) -> byt
   <p class="statline">{result.swept} avisos revisados · <b>{len(result.jobs)}</b> pasaron el filtro ·
      <b>{result.new_count}</b> {"nueva" if result.new_count == 1 else "nuevas"} desde la última corrida{semantic}</p>
 </header>
-{render_filters(params, len(result.jobs), len(rows))}
+{render_state_tabs(params, pool, marks)}
+{render_filters(params, len(result.jobs), len(rows), len(pool) - len(rows))}
 {listing}
 {dropped}"""
     nuevas = f"{result.new_count} " + ("nueva" if result.new_count == 1 else "nuevas")
+    # The sidebar carries the queue, not the catalogue: "63 en radar" says the
+    # same thing every day, "12 pendientes" is the number that moves when you
+    # work through them.
+    pending = sum(1 for r in result.jobs if marks.get(r["id"]) not in ANSWERED)
     return shell(
         "Radar", body, active="/",
         last_sweep=fmt_when(result.finished_at),
-        foot_stats=f"{len(result.jobs)} en radar · {nuevas}",
+        foot_stats=f"{pending} pendientes · {nuevas}",
         running=running,
     )
 
@@ -1053,7 +1256,10 @@ def render_index(result: scan.Result | None, params: dict, running: bool) -> byt
 # --------------------------------------------------------------------------
 
 
-def render_detail(result: scan.Result | None, job_id: str) -> tuple[int, bytes]:
+def render_detail(
+    result: scan.Result | None, job_id: str, marks: dict | None = None
+) -> tuple[int, bytes]:
+    marks = marks or {}
     row = next((r for r in (result.jobs if result else []) if r["id"] == job_id), None)
     if row is None:
         return 404, shell(
@@ -1079,9 +1285,12 @@ def render_detail(result: scan.Result | None, job_id: str) -> tuple[int, bytes]:
         '<span class="none">ninguna</span>'
     )
 
+    state = marks.get(job_id, "")
+    tag = f'<span class="state">{e(STATES[state][0])}</span>' if state in STATES else ""
+
     body = f"""<p class="crumb"><a href="/">← Radar</a></p>
 <header class="detail-head">
-  <h1>{e(row["title"])}{'<span class="badge">NUEVA</span>' if row["is_new"] else ""}</h1>
+  <h1>{e(row["title"])}{'<span class="badge">NUEVA</span>' if row["is_new"] else ""}{tag}</h1>
   <div class="detail-stats">
     <p class="stat">puntaje<b>{row["score"]:.2f}</b></p>
     <p class="stat">seniority<b>{e(level)}</b></p>
@@ -1091,6 +1300,10 @@ def render_detail(result: scan.Result | None, job_id: str) -> tuple[int, bytes]:
     <p class="stat">categoría<b>{e(row["category"] or "—")}</b></p>
   </div>
   <p class="apply"><a class="btn" href="{e(row["url"])}" rel="noopener">Abrir el aviso en Get on Board ↗</a></p>
+  <div class="mark-bar">
+    <span class="hint">¿Qué hacés con esta?</span>
+    {_mark_form(job_id, state, f"/aviso/{urllib.parse.quote(job_id)}")}
+  </div>
 </header>
 <section class="panel">
   <h2>De dónde sale el puntaje</h2>
@@ -1905,7 +2118,9 @@ def make_handler(*, profile_path: Path, db: Path, no_semantic: bool):
                 }
 
                 if path == "/":
-                    self._send(200, render_index(scan.last(db), params, state.running))
+                    self._send(200, render_index(
+                        scan.last(db), params, state.running, scan.marks(db),
+                    ))
                 elif path == "/progreso":
                     last = scan.last(db)
                     self._send(200, render_progress(
@@ -1934,7 +2149,9 @@ def make_handler(*, profile_path: Path, db: Path, no_semantic: bool):
                     ))
                 elif path.startswith("/aviso/"):
                     status, body = render_detail(
-                        scan.last(db), urllib.parse.unquote(path[len("/aviso/"):])
+                        scan.last(db),
+                        urllib.parse.unquote(path[len("/aviso/"):]),
+                        scan.marks(db),
                     )
                     self._send(status, body)
                 else:
@@ -1975,6 +2192,21 @@ def make_handler(*, profile_path: Path, db: Path, no_semantic: bool):
                     else:
                         profiles.save(profile, profile_path)
                         self._redirect("/perfil?ok=1")
+                elif path == "/marcar":
+                    form = self._form()
+                    job_id = (form.get("id") or [""])[0]
+                    wanted = (form.get("state") or [""])[0]
+                    if job_id:
+                        # Asking for the state a posting already has clears it:
+                        # the same button that marks is the one that un-marks.
+                        current = scan.marks(db).get(job_id, "")
+                        scan.mark(db, job_id, "" if wanted == current else wanted)
+                    back = (form.get("back") or ["/"])[0]
+                    if not back.startswith("/") or back.startswith("//"):
+                        # A redirect target arriving in a form field only ever
+                        # points back into this app.
+                        back = "/"
+                    self._redirect(back)
                 elif path == "/cv":
                     form = self._form()
                     profiles.save_cv(profile_path, (form.get("cv") or [""])[0])

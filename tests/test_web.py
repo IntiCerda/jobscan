@@ -593,6 +593,80 @@ def test_every_page_carries_the_navigation():
           'aria-current="page"' in pages["perfil"])
 
 
+# -- decisions --------------------------------------------------------------
+
+
+def test_a_decision_outlives_the_snapshot_it_was_made_on():
+    # Marks live beside the runs, not inside them. Tomorrow's sweep replaces the
+    # snapshot a decision was made on, and the decision has to survive that —
+    # otherwise every scan resurrects everything you already threw away.
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Path(tmp) / "t.sqlite3"
+        with Store(db) as store:
+            store.save_run(make_result().to_dict())
+            store.mark("1", "applied")
+            store.commit()
+        with Store(db) as store:
+            store.save_run(make_result(swept=999).to_dict())  # a fresh sweep lands
+            store.commit()
+        with Store(db) as store:
+            check("the mark survived the new run", store.marks() == {"1": "applied"})
+            store.mark("1", "")
+            store.commit()
+        with Store(db) as store:
+            check("clearing removes it instead of storing a blank", store.marks() == {})
+
+
+def test_the_default_view_is_the_queue_that_shrinks():
+    rows = [make_row(id=str(i), score=float(30 - i)) for i in range(4)]
+    marks = {"0": "applied", "1": "discarded", "2": "saved"}
+    pending = [r["id"] for r in web.apply_filters(rows, {}, marks)]
+    check("what you answered leaves the default view", pending == ["2", "3"])
+    check("saving keeps it pending — later is not done", "2" in pending)
+    check("nothing marked means nothing hidden", len(web.apply_filters(rows, {})) == 4)
+    check("todas shows everything", len(web.apply_filters(rows, {"state": "all"}, marks)) == 4)
+    check(
+        "one state shows only itself",
+        [r["id"] for r in web.apply_filters(rows, {"state": "discarded"}, marks)] == ["1"],
+    )
+    check(
+        "a junk state falls back to pending, not to an empty page",
+        [r["id"] for r in web.apply_filters(rows, {"state": "???"}, marks)] == ["2", "3"],
+    )
+
+
+def test_the_views_say_out_loud_what_they_hide():
+    # A default that narrows in silence is the bad kind of default. The tabs
+    # carry the counts and the listing states how many rows it left out, so
+    # nothing disappears without saying where it went.
+    rows = [make_row(id=str(i), score=float(30 - i)) for i in range(4)]
+    marks = {"0": "applied", "1": "discarded"}
+    html = web.render_index(make_result(jobs=rows), {}, False, marks).decode()
+    check("the pending tab is the current one", 'aria-current="page">pendientes' in html)
+    check(
+        "the answered ones are counted where you can click them",
+        'descartadas <span class="count">1</span>' in html,
+    )
+    check("and the listing states how many it left out", "2 están fuera de esta vista" in html)
+    check("the sidebar carries the queue, not the catalogue", "2 pendientes" in html)
+
+
+def test_marking_a_posting_leaves_a_way_to_unmark_it():
+    html = web.render_index(
+        make_result(jobs=[make_row(id="7")]), {"state": "all"}, False, {"7": "applied"}
+    ).decode()
+    check("the card wears its state", 'class="state">postulé' in html)
+    check(
+        "the button that set it reads as pressed",
+        'value="applied" class="on" aria-pressed="true"' in html,
+    )
+    check("the others stay available", 'value="saved" aria-pressed="false"' in html)
+    check(
+        "and the form carries the view it was pressed from",
+        'name="back" value="/?state=all"' in html,
+    )
+
+
 # -- concurrency ------------------------------------------------------------
 
 
@@ -716,6 +790,38 @@ def test_the_server_actually_answers():
 
             with urllib.request.urlopen(f"{base}/?q=backend&sort=quiet", timeout=5) as r:
                 check("a filtered URL answers 200", r.status == 200)
+
+            def mark(job_id, state, back="/"):
+                body = urllib.parse.urlencode(
+                    {"id": job_id, "state": state, "back": back}
+                ).encode()
+                return urllib.request.Request(f"{base}/marcar", data=body, method="POST")
+
+            with urllib.request.urlopen(mark("1", "discarded"), timeout=5) as r:
+                check("marking lands back on the radar", r.status == 200)
+            with Store(db) as store:
+                check("the decision reached the database", store.marks() == {"1": "discarded"})
+            with urllib.request.urlopen(mark("1", "discarded"), timeout=5):
+                pass
+            with Store(db) as store:
+                check("pressing the same state again clears it", store.marks() == {})
+
+            # Redirects are not followed here on purpose: if the guard broke,
+            # following one would send the test suite out to the open internet.
+            class NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, *a, **kw):
+                    return None
+
+            try:
+                urllib.request.build_opener(NoRedirect).open(
+                    mark("1", "saved", back="https://ejemplo.invalido/x"), timeout=5
+                )
+                check("a hostile redirect target is refused", False)
+            except urllib.error.HTTPError as exc:
+                check(
+                    "a redirect target arriving in a form never leaves the app",
+                    exc.headers["Location"] == "/",
+                )
 
             with urllib.request.urlopen(f"{base}/progreso", timeout=5) as r:
                 check("the progress page answers 200", r.status == 200)

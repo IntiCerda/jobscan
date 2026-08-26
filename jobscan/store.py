@@ -11,6 +11,12 @@ minutes of GPU for an identical answer.
 Finished runs are stored whole for the same reason. A scan costs minutes of
 network; the web UI opens on the last one instantly rather than making the
 reader wait for a fresh answer to a question they asked yesterday.
+
+What the reader decided about a posting lives beside the runs rather than
+inside them. A run is a snapshot of what the API said; a mark is a fact about
+the person. Keeping them apart means marking a posting never rewrites history,
+and a decision made today still holds after tomorrow's sweep replaces the
+snapshot it was made on.
 """
 
 from __future__ import annotations
@@ -39,6 +45,11 @@ CREATE TABLE IF NOT EXISTS runs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     finished_at TEXT NOT NULL,
     payload     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS marks (
+    job_id      TEXT PRIMARY KEY,
+    state       TEXT NOT NULL,
+    marked_at   TEXT NOT NULL
 );
 """
 
@@ -129,6 +140,31 @@ class Store:
             "DELETE FROM runs WHERE id NOT IN "
             "(SELECT id FROM runs ORDER BY id DESC LIMIT ?)",
             (KEEP_RUNS,),
+        )
+
+    # -- what the reader decided ------------------------------------------
+
+    def marks(self) -> dict[str, str]:
+        return {r[0]: r[1] for r in self.db.execute("SELECT job_id, state FROM marks")}
+
+    def mark(self, job_id: str, state: str) -> None:
+        """Set one posting's state; an empty state clears it.
+
+        Clearing deletes the row instead of storing a blank, so "never decided"
+        and "decided, then undone" read as the same thing — which is what they
+        are from the radar's side.
+        """
+        if not state:
+            self.db.execute("DELETE FROM marks WHERE job_id = ?", (job_id,))
+            return
+        self.db.execute(
+            """
+            INSERT INTO marks (job_id, state, marked_at) VALUES (?, ?, ?)
+            ON CONFLICT(job_id) DO UPDATE SET
+                state     = excluded.state,
+                marked_at = excluded.marked_at
+            """,
+            (job_id, state, _now()),
         )
 
     def last_run(self) -> dict | None:
