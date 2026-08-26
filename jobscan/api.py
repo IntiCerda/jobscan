@@ -196,8 +196,16 @@ def search(
     params: dict[str, str | int] = {"query": query, "per_page": per_page}
     if category:
         params["category"] = category
-    if remote_only:
-        params["remote"] = "true"
+    # `remote` is deliberately not sent, for the same reason as `category`
+    # above: the server's filter disagrees with the postings themselves. A
+    # 2BRAINS full-stack role carrying remote=True, remote_modality
+    # "remote_local" and countries ["Remote"] is absent from a `remote=true`
+    # search that otherwise drops 100 results to 35. Filtering here would hide
+    # postings that are remote by their own attributes, and hide them silently
+    # — they never reach the knockout stage, so nothing reports them as
+    # dropped. `remote_only` is honoured in scoring.knockouts instead, where a
+    # rejection is visible.
+    _ = remote_only
 
     jobs: list[Job] = []
     page = 1

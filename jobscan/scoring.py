@@ -72,6 +72,21 @@ def detect_lang(text: str) -> str | None:
     return "es" if es > en else "en"
 
 
+# An English *requirement*, as opposed to a mention. "inglés técnico de lectura"
+# and "inglés deseable" are not requirements and must not match, so the level and
+# the insistence have to be adjacent to the word — a bare "inglés" is not enough.
+_DEMANDS_ENGLISH = re.compile(
+    r"ingl[eé]s[^.\n]{0,60}(avanzado|intermedio|fluido|conversacional|"
+    r"excluyente|indispensable|obligatorio|requerido|b2|c1|c2|"
+    # "Inglés hablado y escrito sólido" — a level named without a CEFR label.
+    r"hablado|escrito|s[oó]lido|bilingüe|bilingue|nativo)"
+    r"|(avanzado|intermedio|fluido|conversacional|excluyente|indispensable|"
+    r"obligatorio|requerido|nivel|dominio|manejo)[^.\n]{0,40}ingl[eé]s"
+    r"|english[^.\n]{0,40}(proficiency|required|fluent|b2|c1)",
+    re.I,
+)
+
+
 @dataclass
 class Score:
     total: float
@@ -97,6 +112,21 @@ def knockouts(job: Job, profile: dict) -> list[str]:
     if lang in excluded_langs:
         how = " (deducido del texto)" if inferred else ""
         reasons.append(f"escrito en '{lang}'{how} — exige postular en ese idioma")
+
+    # Applied here rather than as an API parameter: the server's `remote=true`
+    # filter drops postings that describe themselves as remote. Done at this
+    # stage a rejection is at least reported, instead of the posting never
+    # arriving at all.
+    if profile.get("search", {}).get("remote_only", True) and not job.remote:
+        reasons.append("presencial o híbrido")
+
+    # A posting written in Spanish that demands English is just as closed as one
+    # written in English, and `exclude_langs` only ever looked at the language of
+    # the prose. Improving's "Inglés intermedio-avanzado o avanzado
+    # (indispensable)" sailed through, as did a posting whose own URL says
+    # `con-ingles-avanzado`.
+    if "en" in excluded_langs and _DEMANDS_ENGLISH.search(job.text):
+        reasons.append("pide inglés como requisito")
 
     excluded_flags = set(f.get("exclude_flags", []))
     hit_flags = sorted(excluded_flags.intersection(job.flags))

@@ -50,6 +50,7 @@ PROFILE = {
         "weight_openness": 2.0,
         "openness_cap": 3.0,
     },
+    "search": {"remote_only": True},
     "seniority": {"fit": [1, 2, 3], "reach": [4]},
 }
 
@@ -398,6 +399,48 @@ def test_no_experience_required_is_not_ranked_below_senior():
     entry = make_job(seniority_id=1)
     senior = make_job(seniority_id=4)
     assert score(entry, PROFILE).parts["seniority"] > score(senior, PROFILE).parts["seniority"]
+
+
+def test_an_onsite_posting_is_dropped_here_not_by_the_api():
+    # The API's remote=true filter omits postings that call themselves remote,
+    # so the sweep fetches everything and the decision is made on the attribute.
+    assert "presencial o híbrido" in knockouts(make_job(remote=False), PROFILE)
+
+
+def test_a_remote_posting_survives():
+    assert knockouts(make_job(remote=True), PROFILE) == []
+
+
+def test_remote_only_can_be_turned_off():
+    loose = {**PROFILE, "search": {"remote_only": False}}
+    assert knockouts(make_job(remote=False), loose) == []
+
+
+def test_a_spanish_posting_that_demands_english_is_dropped():
+    body = "Buscamos Python y Docker. Ingles intermedio-avanzado o avanzado (indispensable)."
+    assert "pide ingles como requisito" in [r.replace("é","e") for r in knockouts(make_job(text=body), PROFILE)]
+
+
+def test_the_level_can_come_before_the_word():
+    body = "Requisitos: Python solido. Nivel de ingles avanzado. Docker."
+    assert knockouts(make_job(text=body), PROFILE)
+
+
+def test_reading_english_is_not_a_requirement_to_speak_it():
+    # What he actually has, and what many postings ask for: reading technical
+    # docs. Knocking these out would throw away good roles.
+    body = "Buscamos Python y Docker. Ingles tecnico de lectura. Trabajo en espanol."
+    assert knockouts(make_job(text=body), PROFILE) == []
+
+
+def test_a_bare_mention_of_english_is_not_a_requirement():
+    body = "Buscamos Python. El equipo es diverso y hay companeros que hablan ingles."
+    assert knockouts(make_job(text=body), PROFILE) == []
+
+
+def test_a_level_named_without_a_cefr_label_still_counts():
+    body = "Python y Docker. Ingles hablado y escrito solido: stakeholders en USA."
+    assert knockouts(make_job(text=body), PROFILE)
 
 
 if __name__ == "__main__":
