@@ -128,6 +128,15 @@ def knockouts(job: Job, profile: dict) -> list[str]:
     if "en" in excluded_langs and _DEMANDS_ENGLISH.search(job.text):
         reasons.append("pide inglés como requisito")
 
+    # Salary is one weighted signal among six, so a posting can pay a quarter of
+    # what you need and still rank on stack alone — a $500-650 React role sat at
+    # #16. A published ceiling below the floor is not a trade-off to weigh, it is
+    # a no, so it belongs here. Postings that publish nothing are untouched:
+    # most good ones omit it, and silence is not an offer.
+    floor = f.get("salary_floor_usd")
+    if floor and job.max_salary and job.max_salary < float(floor):
+        reasons.append(f"paga hasta ${job.max_salary} — bajo el piso de ${floor}")
+
     excluded_flags = set(f.get("exclude_flags", []))
     hit_flags = sorted(excluded_flags.intersection(job.flags))
     if hit_flags:

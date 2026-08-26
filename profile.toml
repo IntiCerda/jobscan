@@ -53,6 +53,12 @@ allowed_categories = [
   "SysAdmin / DevOps / QA",
 ]
 
+# A published salary ceiling below this is a no, not a trade-off. Set under the
+# target in [scoring] on purpose: RiskAmerica's 1500-2000 observability role is
+# worth reading, a 500-650 one is not. Postings that publish nothing are
+# unaffected.
+salary_floor_usd = 1200
+
 # GetOnBoard's own quality flags on a posting. `talent_pool` means the company
 # is collecting CVs rather than filling a named role.
 exclude_flags = ["talent_pool", "not_really_remote"]

@@ -31,6 +31,7 @@ PROFILE = {
         "exclude_in_title": ["oracle", ".net"],
         "penalize_in_body": ["spring boot"],
         "blockers": ["aws", "retail"],
+        "salary_floor_usd": 1200,
         "openness": ["junior", "te ensenamos", "sin experiencia"],
     },
     "fit": {"stack": {"python": 3.0, "fastapi": 3.0, "rag": 4.0}},
@@ -441,6 +442,19 @@ def test_a_bare_mention_of_english_is_not_a_requirement():
 def test_a_level_named_without_a_cefr_label_still_counts():
     body = "Python y Docker. Ingles hablado y escrito solido: stakeholders en USA."
     assert knockouts(make_job(text=body), PROFILE)
+
+
+def test_a_published_ceiling_under_the_floor_is_a_no():
+    assert knockouts(make_job(min_salary=500, max_salary=650), PROFILE)
+
+
+def test_a_range_that_reaches_the_floor_survives():
+    assert knockouts(make_job(min_salary=1500, max_salary=2000), PROFILE) == []
+
+
+def test_publishing_no_salary_is_not_held_against_a_posting():
+    # Most of the good ones omit it; silence is not an offer.
+    assert knockouts(make_job(min_salary=None, max_salary=None), PROFILE) == []
 
 
 if __name__ == "__main__":
