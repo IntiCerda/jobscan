@@ -1829,6 +1829,8 @@ def render_profile_page(
       <h2>Filtros finos</h2>
       {_chipfield("penalize_in_body", "Restan puntos si aparecen en el cuerpo", filters.get("penalize_in_body", []), rows=3,
                   hint="No descartan: un aviso puede nombrar Java en los deseables y seguir siendo bueno.")}
+      {_chipfield("blockers", "Restan puntos si el aviso los marca excluyentes", filters.get("blockers", []), rows=3,
+                  hint="Solo cuentan dentro de la zona de «excluyente». En el cuerpo suelto no cuestan nada.")}
       {_chipfield("allowed_categories", "Categorías de aviso aceptadas", filters.get("allowed_categories", []), rows=3,
                   hint="Nombres exactos de /api/v0/categories.")}
       <div class="field"><label for="p-langs">Idiomas excluidos (separados por coma)</label>
@@ -1851,6 +1853,10 @@ def render_profile_page(
         {_number("stack_half_point", "Saturación del stack", scoring.get("stack_half_point", 12.0))}
         {_number("good_applications_count", "Postulaciones aceptables", scoring.get("good_applications_count", 100), step="10")}
         {_number("stale_after_days", "Vieja a los (días)", scoring.get("stale_after_days", 45.0), step="5")}
+      </div>
+      <div class="cols-3">
+        {_number("weight_blocker", "Castigo por excluyente", scoring.get("weight_blocker", 2.5), step="0.5")}
+        {_number("blocker_cap", "Excluyentes que se cuentan", scoring.get("blocker_cap", 3.0), step="1")}
       </div>
     </section>
   </details>

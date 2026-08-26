@@ -78,6 +78,8 @@ class Score:
     parts: dict[str, float] = field(default_factory=dict)
     matched: list[str] = field(default_factory=list)
     penalized: list[str] = field(default_factory=list)
+    blocked: list[str] = field(default_factory=list)
+    openness: list[str] = field(default_factory=list)
     semantic: float | None = None
 
 
@@ -148,6 +150,84 @@ def _body_penalty(job: Job, profile: dict) -> tuple[float, list[str]]:
     return -1.5 * len(hits), hits
 
 
+# Where a requirements block stops being mandatory. Everything from an
+# "excluyente" marker up to one of these is read as hard requirements.
+_STOP_MARKER = re.compile(
+    r"deseable|deseado|opcional|valorar|valoramos|valoraremos|plus\b"
+    r"|nice to have|beneficio|ofrecemos|qué ofrecemos|te ofrecemos",
+    re.I,
+)
+_EXCLUYENTE = re.compile(r"excluyentes?", re.I)
+
+# How far past the marker to keep reading, and how far back to look. The lookback
+# catches the inline form ("INGLÉS AVANZADO EXCLUYENTE"), where the requirement is
+# written before the word rather than under it.
+_BLOCK_AHEAD = 1200
+_BLOCK_BACK = 200
+
+
+def hard_requirement_text(text: str) -> str:
+    """The parts of `text` that read as mandatory requirements.
+
+    Returns "" when the posting never says "excluyente", which is most of them —
+    a posting that does not separate must-have from nice-to-have gets no penalty,
+    because there is nothing to read as a wall.
+    """
+    regions: list[str] = []
+    for m in _EXCLUYENTE.finditer(text):
+        start = max(0, m.start() - _BLOCK_BACK)
+        tail = text[m.end() : m.end() + _BLOCK_AHEAD]
+        stop = _STOP_MARKER.search(tail)
+        regions.append(text[start : m.end()] + tail[: stop.start() if stop else len(tail)])
+    return "\n".join(regions).lower()
+
+
+def _blocker_penalty(job: Job, profile: dict) -> tuple[float, list[str]]:
+    """Terms you do not have, found where the posting says they are mandatory.
+
+    The keyword ranker cannot tell "we build with hexagonal architecture" from
+    "hexagonal architecture required, plus six AWS services you have never
+    touched". Both are the same words in the same body, so a posting that is a
+    wall scored as a match — Witi sat at #2 for six days on `hexagonal`, `ddd`
+    and `event-driven` while listing AWS, IaC and retail experience as
+    excluyentes.
+
+    Deliberately a penalty and not a knockout: "excluyente" is often aspirational,
+    and a posting worth arguing with should still be visible. It drops, it does
+    not disappear.
+    """
+    block = hard_requirement_text(job.text)
+    if not block:
+        return 0.0, []
+    hits = [
+        t
+        for t in profile.get("filters", {}).get("blockers", [])
+        if _term_pattern(t).search(block)
+    ]
+    return float(len(hits)), hits
+
+
+def _openness(job: Job, profile: dict) -> tuple[float, list[str]]:
+    """Signals that the posting will train rather than demand a finished engineer.
+
+    The stack table can only reward what you already know, which quietly biases
+    the whole ranking toward jobs you have already done. A startup writing
+    "junior, te enseñamos, stack Go" scores nothing on stack — and it is exactly
+    the posting worth reading, because the gate there is attitude, not a
+    checklist.
+
+    Counted once per term like the stack, so a posting cannot win by saying
+    "junior" nine times.
+    """
+    haystack = job.text.lower()
+    hits = [
+        t
+        for t in profile.get("filters", {}).get("openness", [])
+        if _term_pattern(t).search(haystack)
+    ]
+    return float(len(hits)), hits
+
+
 def _competition(job: Job, profile: dict) -> float:
     """1.0 when few people have applied in total, decaying toward 0.
 
@@ -211,6 +291,8 @@ def score(
 
     stack, matched = _stack_points(job, profile)
     penalty, penalized = _body_penalty(job, profile)
+    blockers, blocked = _blocker_penalty(job, profile)
+    openness, open_hits = _openness(job, profile)
 
     sim = cosine(job_vector, profile_vector)
     # Cosine over text embeddings clusters in roughly 0.4-0.9; rescaling from
@@ -235,6 +317,16 @@ def score(
         "freshness": float(w.get("weight_freshness", 0.0)) * _freshness(job, profile),
         "salary": float(w.get("weight_salary", 0.0)) * _salary(job, profile),
         "seniority": float(w.get("weight_seniority", 0.0)) * _seniority(job, profile),
+        # Its own part rather than more negative stack points: the saturating
+        # norm would swallow it, and a posting that is a wall should say so in
+        # the breakdown instead of quietly ranking lower. Capped so a listing
+        # that repeats every cloud service cannot drive the total to nonsense.
+        "blockers": -float(w.get("weight_blocker", 2.5))
+        * min(blockers, float(w.get("blocker_cap", 3.0))),
+        # Capped like the blockers, and for the same reason: two or three of
+        # these say "they will train you", a dozen just means a wordy advert.
+        "openness": float(w.get("weight_openness", 2.0))
+        * min(openness, float(w.get("openness_cap", 3.0))),
     }
 
     return Score(
@@ -242,5 +334,7 @@ def score(
         parts={k: round(v, 2) for k, v in parts.items()},
         matched=sorted(matched),
         penalized=sorted(penalized),
+        blocked=sorted(blocked),
+        openness=sorted(open_hits),
         semantic=None if sim is None else round(sim, 4),
     )

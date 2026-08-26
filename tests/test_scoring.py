@@ -17,7 +17,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from jobscan.api import Job, _strip_html, parse_job  # noqa: E402
 from jobscan.embed import cosine  # noqa: E402
-from jobscan.scoring import detect_lang, knockouts, score  # noqa: E402
+from jobscan.scoring import (  # noqa: E402
+    detect_lang,
+    hard_requirement_text,
+    knockouts,
+    score,
+)
 
 PROFILE = {
     "filters": {
@@ -25,6 +30,8 @@ PROFILE = {
         "exclude_flags": ["talent_pool"],
         "exclude_in_title": ["oracle", ".net"],
         "penalize_in_body": ["spring boot"],
+        "blockers": ["aws", "retail"],
+        "openness": ["junior", "te ensenamos", "sin experiencia"],
     },
     "fit": {"stack": {"python": 3.0, "fastapi": 3.0, "rag": 4.0}},
     "scoring": {
@@ -38,8 +45,12 @@ PROFILE = {
         "good_applications_count": 100,
         "stale_after_days": 45.0,
         "target_salary_usd": 2000,
+        "weight_blocker": 2.5,
+        "blocker_cap": 3.0,
+        "weight_openness": 2.0,
+        "openness_cap": 3.0,
     },
-    "seniority": {"fit": [2, 3], "reach": [4]},
+    "seniority": {"fit": [1, 2, 3], "reach": [4]},
 }
 
 
@@ -304,6 +315,89 @@ def test_a_declared_language_is_never_second_guessed():
 
 def test_a_stub_posting_is_left_alone():
     check("too little prose returns no verdict", detect_lang("Backend Developer") is None)
+
+
+# The posting that motivated the blocker penalty: strong on the words the ranker
+# rewards, and a wall in the section that says what is mandatory.
+WITI_BODY = chr(10).join([
+    "Buscamos Full Stack Senior. Arquitectura hexagonal y microservicios, NestJS y TypeScript.",
+    "Requisitos Excluyentes",
+    "Experiencia en servicios AWS: Lambda, S3, DynamoDB, SQS, SNS y EventBridge.",
+    "Experiencia comprobada en el rubro retail y/o ecommerce.",
+    "Requisitos Deseables",
+    "Experiencia con Next.js y con herramientas de observabilidad.",
+])
+
+
+def test_a_wall_of_excluyentes_ranks_below_the_same_posting_without_them():
+    walled = make_job(text=WITI_BODY)
+    clean = make_job(text=WITI_BODY.replace("Requisitos Excluyentes", "Requisitos Deseables"))
+    assert score(walled, PROFILE).total < score(clean, PROFILE).total
+
+
+def test_the_blocked_terms_are_reported_so_the_penalty_is_explainable():
+    assert score(make_job(text=WITI_BODY), PROFILE).blocked == ["aws", "retail"]
+
+
+def test_a_walled_posting_is_ranked_down_but_never_hidden():
+    # The whole point of a penalty over a knockout: it still passes the filter.
+    assert knockouts(make_job(text=WITI_BODY), PROFILE) == []
+    assert score(make_job(text=WITI_BODY), PROFILE).total > 0
+
+
+def test_the_same_terms_outside_the_excluyente_block_cost_nothing():
+    # "we build on AWS" is a fact about the team, not a wall in front of you.
+    plain = make_job(text="Trabajamos sobre AWS y atendemos clientes de retail. Python y FastAPI.")
+    assert score(plain, PROFILE).blocked == []
+
+
+def test_a_posting_that_never_says_excluyente_has_no_hard_requirements():
+    assert hard_requirement_text("Buscamos Python. Deseable AWS y retail.") == ""
+
+
+def test_the_block_stops_at_the_deseables_heading():
+    block = hard_requirement_text(WITI_BODY)
+    assert "aws" in block
+    assert "observabilidad" not in block
+
+
+def test_the_inline_form_is_caught_too():
+    # LinkedIn postings write it on one line, before the word.
+    block = hard_requirement_text("Remoto. INGLES AVANZADO Y AWS EXCLUYENTE. Postula ya.")
+    assert "aws" in block
+
+
+def test_the_penalty_is_capped_so_a_service_list_cannot_dominate():
+    many = {**PROFILE, "filters": {**PROFILE["filters"],
+                                   "blockers": ["aws", "retail", "gcp", "azure", "banca"]}}
+    body = WITI_BODY.replace("Requisitos Excluyentes",
+                             chr(10).join(["Requisitos Excluyentes", "GCP, Azure y banca tambien."]))
+    got = score(make_job(text=body), many)
+    assert len(got.blocked) == 5
+    # cap 3 x weight 2.5 -- five hits cost the same as three.
+    assert got.parts["blockers"] == -7.5
+
+
+def test_a_posting_that_trains_beats_the_same_one_that_does_not():
+    # The bias this closes: the stack table can only reward what you already
+    # know, so a shop willing to teach scored no better than one demanding a
+    # finished engineer.
+    teaches = make_job(text="Buscamos junior, te ensenamos, sin experiencia previa. Stack Go.")
+    demands = make_job(text="Buscamos ingeniero. Stack Go.")
+    assert score(teaches, PROFILE).total > score(demands, PROFILE).total
+
+
+def test_the_openness_signals_are_reported():
+    got = score(make_job(text="Buscamos junior, te ensenamos."), PROFILE)
+    assert got.openness == ["junior", "te ensenamos"]
+
+
+def test_no_experience_required_is_not_ranked_below_senior():
+    # seniority id 1 scored 0.0 while a Senior posting scored 0.4 -- backwards
+    # for someone breaking in.
+    entry = make_job(seniority_id=1)
+    senior = make_job(seniority_id=4)
+    assert score(entry, PROFILE).parts["seniority"] > score(senior, PROFILE).parts["seniority"]
 
 
 if __name__ == "__main__":

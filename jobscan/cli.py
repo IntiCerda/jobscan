@@ -72,6 +72,12 @@ def render(result: Result, shown: list[dict], *, explain: bool) -> str:
             lines += ["Coincide en: " + ", ".join(row["matched"]), ""]
         if row["penalized"]:
             lines += ["⚠️ También menciona: " + ", ".join(row["penalized"]), ""]
+        # Without this the penalty is invisible: the posting still lists every
+        # term you match, and nothing explains why it ranks where it does.
+        if row.get("blocked"):
+            lines += ["⛔ Pide como excluyente: " + ", ".join(row["blocked"]), ""]
+        if row.get("openness"):
+            lines += ["🌱 Abierto a formar: " + ", ".join(row["openness"]), ""]
         if explain:
             detail = " · ".join(f"{k} {v}" for k, v in row["parts"].items())
             sim = "—" if row["semantic"] is None else f"{row['semantic']:.3f}"

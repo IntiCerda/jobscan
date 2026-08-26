@@ -95,6 +95,8 @@ def _row(job: api.Job, sc, *, is_new: bool) -> dict:
         "parts": sc.parts,
         "matched": sc.matched,
         "penalized": sc.penalized,
+        "blocked": sc.blocked,
+        "openness": sc.openness,
         "semantic": sc.semantic,
     }
 

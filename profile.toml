@@ -73,6 +73,35 @@ penalize_in_body = [
   "angular", "salesforce", "ruby on rails", "cobol",
 ]
 
+# Things you do not have, which only cost points where the posting marks them
+# mandatory. The same word in the body is free: "we build on AWS" is a fact
+# about the team, "AWS experience (excluyente)" is a wall in front of you.
+#
+# Terraform is deliberately absent: it is in the stack table, not here. So is
+# English, which knockouts drops outright rather than penalizing.
+blockers = [
+  "aws", "amazon web services", "lambda", "dynamodb", "eventbridge",
+  "cloudformation", "gcp", "google cloud", "bigquery", "azure",
+  "retail", "ecommerce", "e-commerce", "banca", "bancaria",
+]
+
+# The mirror of `blockers`: signals that the posting will train rather than
+# demand a finished engineer. They exist because the stack table can only reward
+# what you already know, which biases the whole ranking toward jobs you have
+# already done.
+#
+# Unambiguous phrases only. The first version included bare "formación",
+# "acompañamiento" and "aprender", which pushed a Senior AI posting to #1 — there
+# "formación" meant academic background and "acompañamiento" meant hand-holding
+# the client. A word that reads the same in a posting that trains and one that
+# demands is not a signal.
+openness = [
+  "junior", "trainee", "sin experiencia", "primer empleo", "practicante",
+  "práctica profesional", "recién egresado", "recien egresado",
+  "te enseñamos", "ganas de aprender", "mentoría", "mentoria",
+  "plan de carrera", "bootcamp", "no necesitás experiencia",
+]
+
 [fit]
 # Terms that earn points when they appear. Weight is how much one occurrence is
 # worth; presence is counted once per term, not per repetition, so a posting
@@ -123,6 +152,17 @@ weight_freshness = 5.0
 weight_salary = 3.0
 weight_seniority = 4.0
 
+# What each `blockers` term found in the mandatory section costs, and how many
+# are counted. 2.5 x 3 = 7.5 is enough to take a posting off the podium without
+# hiding it: Witi fell from 26.01 to 18.5 and stayed visible further down.
+weight_blocker = 2.5
+blocker_cap = 3.0
+
+# What each `openness` signal adds, with the same cap. Two or three say "we will
+# train you"; a dozen only says the advert is wordy.
+weight_openness = 2.0
+openness_cap = 3.0
+
 # Raw stack points at which the stack signal reaches half its weight. Keeps a
 # posting that lists every technology from drowning out competition and pay —
 # see the note in scoring.score.
@@ -145,5 +185,5 @@ target_salary_usd = 2000
 # Seniority ids come from /api/v0/seniorities. Full credit for levels you fit,
 # partial for a reach, zero for the ones that are not worth the application.
 # 1 = Sin experiencia, 2 = Junior, 3 = Semi Senior, 4 = Senior, 5 = Expert
-fit = [2, 3]
+fit = [1, 2, 3]
 reach = [4]
