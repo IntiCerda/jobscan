@@ -222,9 +222,18 @@ def _lines(raw: str) -> list[str]:
 
 
 def _floats(form: dict, names: list[str], errors: list[str]) -> dict[str, float]:
+    """Parse the named numeric fields. Absent is not an error; unreadable is.
+
+    A field the form never sent is left out so the caller's default applies.
+    Treating absence as an error meant that every time a new weight was added
+    here, any form that predated it failed to save at all — which is what
+    happened when the blocker and openness weights arrived.
+    """
     out = {}
     for name in names:
-        raw = (form.get(name) or [""])[0].strip().replace(",", ".")
+        if not (form.get(name) or [""])[0].strip():
+            continue
+        raw = form[name][0].strip().replace(",", ".")
         try:
             out[name] = float(raw)
         except ValueError:

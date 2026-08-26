@@ -1,0 +1,48 @@
+name: tests
+
+# The suites are plain scripts that exit non-zero on the first failed check, so
+# there is nothing to install and no test runner to configure: jobscan imports
+# only the standard library. That is the whole reason this file is short.
+#
+# Two versions rather than one: the code needs 3.11 for `tomllib`, and pinning
+# only to whatever is on the laptop is how a floor quietly rises without anyone
+# deciding to raise it.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Ranking and filters
+        run: python tests/test_scoring.py
+
+      - name: Web UI
+        run: python tests/test_web.py
+
+      - name: The profile still parses
+        # A profile that stops loading breaks every run, and the failure would
+        # otherwise surface as a stack trace mid-sweep rather than here.
+        run: |
+          python -c "
+          import tomllib, pathlib
+          p = tomllib.loads(pathlib.Path('profile.toml').read_text(encoding='utf-8'))
+          assert p['search']['queries'], 'sin términos de búsqueda'
+          assert p['fit']['stack'], 'sin stack'
+          print(len(p['fit']['stack']), 'términos de stack,', len(p['search']['queries']), 'consultas')
+          "

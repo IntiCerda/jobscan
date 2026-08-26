@@ -848,6 +848,26 @@ def test_the_server_actually_answers():
             httpd.server_close()
 
 
+def test_a_form_missing_a_newer_weight_still_saves():
+    # Every weight added to the parser used to break every form that predated
+    # it: an absent field was read as unreadable. Absent means "use the
+    # default"; only a value that is present and not a number is an error.
+    from jobscan import profiles
+
+    base = {
+        "summary": ["dev"], "queries": ["python"], "stack": ["python = 3"],
+        "preset": ["custom"],
+        "weight_stack": ["9"], "weight_semantic": ["9"], "weight_competition": ["9"],
+        "weight_freshness": ["9"], "weight_salary": ["9"], "weight_seniority": ["9"],
+    }
+    prof, errors = profiles.from_form(base)
+    check("a form without the newer weights saves cleanly", errors == [])
+    check("the missing weight falls back to its default",
+          prof["scoring"]["weight_blocker"] == 2.5)
+    check("a value that is present but not a number is still an error",
+          profiles.from_form({**base, "weight_blocker": ["mucho"]})[1] != [])
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
